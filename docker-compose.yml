@@ -1,0 +1,61 @@
+services:
+  domain-check:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: domain-check:latest
+    container_name: domain-check
+    
+    # Default command - override when running
+    # Usage: docker-compose run --rm domain-check example.com
+    command: ["--help"]
+    
+    # Environment variables
+    environment:
+      # Uncomment and set these as needed
+      # DC_CONCURRENCY: "20"
+      # DC_PRESET: "startup"
+      # DC_PRETTY: "true"
+      # DC_TIMEOUT: "10s"
+      # DC_BOOTSTRAP: "true"
+      # DC_TLD: "com,org,io"
+      TERM: xterm-256color
+    
+    # Mount volumes for configuration and input files
+    volumes:
+      # Mount local config file if exists
+      - ./.domain-check.toml:/workspace/.domain-check.toml:ro
+      # Mount current directory for file-based domain lists
+      - .:/workspace/data:ro
+    
+    # Working directory
+    working_dir: /workspace
+    
+    # Network mode
+    network_mode: bridge
+    
+    # Remove container after exit
+    stdin_open: true
+    tty: true
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 128M
+
+  # Service for bulk domain checking from files
+  domain-check-bulk:
+    extends:
+      service: domain-check
+    container_name: domain-check-bulk
+    profiles:
+      - bulk
+    volumes:
+      - ./domains.txt:/workspace/domains.txt:ro
+      - ./output:/workspace/output
+    command: ["--file", "domains.txt", "--json", "-o", "output/results.json"]

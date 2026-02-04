@@ -1,0 +1,84 @@
+name: Docker
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker-compose.yml'
+      - '**/Cargo.toml'
+      - '**/src/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker-compose.yml'
+      - '**/Cargo.toml'
+      - '**/src/**'
+
+jobs:
+  # Build Docker image (without pushing)
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          load: true
+          tags: domain-check:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test Docker image
+        run: |
+          echo "🐳 Testing Docker image..."
+          
+          # Test basic commands
+          docker run --rm domain-check:test --version
+          docker run --rm domain-check:test --help
+          
+          # Test actual domain check
+          docker run --rm domain-check:test example.com
+          
+          # Test with options
+          docker run --rm domain-check:test myapp -t com,io,ai --json
+          
+          echo "✅ Docker image test passed!"
+
+      - name: Check image size
+        run: |
+          docker images domain-check:test --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"
+          
+          # Get size in bytes
+          SIZE=$(docker images domain-check:test --format "{{.Size}}")
+          echo "Image size: $SIZE"
+
+  # Validate Dockerfile
+  lint:
+    name: Lint Dockerfile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ./Dockerfile
+          ignore: DL3018  # Ignore pin versions warning for Alpine/Debian packages
+          failure-threshold: error

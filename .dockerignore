@@ -1,0 +1,41 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# Rust build artifacts
+target/
+Cargo.lock
+**/*.rs.bk
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation (not needed in build)
+docs/
+*.md
+LICENSE
+
+# CI/CD files
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Test files (optional, can include if needed for testing)
+# tests/
+# **/tests/
+
+# Local configuration files
+.domain-check.toml
+*.local.toml
+
+# Assets (demos, etc.)
+assets/
