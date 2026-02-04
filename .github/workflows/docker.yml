@@ -19,16 +19,13 @@ on:
       - '**/src/**'
 
 jobs:
-  # Build Docker image (without pushing)
+  # Build and test Docker image (single platform for testing)
   build:
     name: Build Docker Image
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -37,7 +34,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: false
           load: true
           tags: domain-check:test
@@ -68,6 +65,30 @@ jobs:
           SIZE=$(docker images domain-check:test --format "{{.Size}}")
           echo "Image size: $SIZE"
 
+  # Test multi-platform build (without loading)
+  build-multiplatform:
+    name: Build Multi-Platform Images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build multi-platform images
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: domain-check:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   # Validate Dockerfile
   lint:
     name: Lint Dockerfile
@@ -80,5 +101,8 @@ jobs:
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: ./Dockerfile
-          ignore: DL3018  # Ignore pin versions warning for Alpine/Debian packages
+          ignore: |
+            DL3008
+            DL3015
+            DL3018
           failure-threshold: error
