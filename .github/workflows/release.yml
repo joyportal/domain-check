@@ -333,7 +333,7 @@ jobs:
           echo "id=$RELEASE_ID" >> $GITHUB_OUTPUT
           echo "✅ GitHub release completed!"
 
-  # NEW: Update Homebrew formula
+  # Update Homebrew formula
   update-homebrew:
     name: Update Homebrew Formula
     needs: [validate, create-release]
@@ -422,65 +422,10 @@ jobs:
             echo "✅ Homebrew formula updated to v${VERSION}"
           fi
 
-  # Build and push Docker images
-  build-docker:
-    name: Build Docker Images
-    needs: [validate, create-release]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}},value=v${{ needs.validate.outputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=v${{ needs.validate.outputs.version }}
-            type=semver,pattern={{major}},value=v${{ needs.validate.outputs.version }}
-            type=raw,value=latest,enable=${{ needs.validate.outputs.prerelease == 'false' }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            VERSION=${{ needs.validate.outputs.version }}
-
-      - name: Verify Docker image
-        run: |
-          echo "✅ Docker images built and pushed successfully!"
-          echo "Tags: ${{ steps.meta.outputs.tags }}"
-
   # Post-release verification
   verify-release:
     name: Verify Release
-    needs: [validate, create-release, update-homebrew, build-docker]
+    needs: [validate, create-release, update-homebrew]
     runs-on: ubuntu-latest
     steps:
       - name: Wait for crates.io propagation
@@ -511,28 +456,10 @@ jobs:
           cargo install domain-check@${{ needs.validate.outputs.version }}
           domain-check --version
 
-      - name: Test Docker image
-        run: |
-          echo "🐳 Testing Docker image..."
-          IMAGE="ghcr.io/${{ github.repository }}:${{ needs.validate.outputs.version }}"
-          
-          # Pull and test the image
-          docker pull $IMAGE
-          
-          # Test basic functionality
-          docker run --rm $IMAGE --version
-          docker run --rm $IMAGE --help
-          
-          # Test actual domain check
-          docker run --rm $IMAGE google.com
-          
-          echo "✅ Docker image verified successfully!"
-
       - name: Notify success
         run: |
           echo "✅ Release v${{ needs.validate.outputs.version }} completed successfully!"
           echo "📦 Library: https://crates.io/crates/domain-check-lib"
           echo "🖥️ CLI: https://crates.io/crates/domain-check"
           echo "🍺 Homebrew: brew tap saidutt46/domain-check && brew install domain-check"
-          echo "🐳 Docker: docker pull ghcr.io/${{ github.repository }}:${{ needs.validate.outputs.version }}"
           echo "📋 Release: https://github.com/saidutt46/domain-check/releases/tag/v${{ needs.validate.outputs.version }}"

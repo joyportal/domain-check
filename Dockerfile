@@ -5,7 +5,8 @@ FROM rust:1.82-slim-bookworm AS builder
 WORKDIR /usr/src/domain-check
 
 # Install build dependencies
-RUN apt-get update && apt-get install -y \
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     ca-certificates \
@@ -25,7 +26,8 @@ RUN cargo build --release -p domain-check
 FROM debian:bookworm-slim AS runtime
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
