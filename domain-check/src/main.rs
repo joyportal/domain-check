@@ -518,16 +518,21 @@ fn display_single_result_with_brief_errors(
             }
         }
         Some(false) => {
-            if args.info && result.info.is_some() {
-                let info = result.info.as_ref().unwrap();
-                if args.pretty {
-                    println!(
-                        "🔴 {} is TAKEN ({})",
-                        result.domain,
-                        format_domain_info(info)
-                    );
+            if args.info {
+                if let Some(info) = result.info.as_ref() {
+                    if args.pretty {
+                        println!(
+                            "🔴 {} is TAKEN ({})",
+                            result.domain,
+                            format_domain_info(info)
+                        );
+                    } else {
+                        println!("{} TAKEN ({})", result.domain, format_domain_info(info));
+                    }
+                } else if args.pretty {
+                    println!("🔴 {} is TAKEN", result.domain);
                 } else {
-                    println!("{} TAKEN ({})", result.domain, format_domain_info(info));
+                    println!("{} TAKEN", result.domain);
                 }
             } else if args.pretty {
                 println!("🔴 {} is TAKEN", result.domain);
@@ -983,16 +988,21 @@ fn display_single_result(
             }
         }
         Some(false) => {
-            if args.info && result.info.is_some() {
-                let info = result.info.as_ref().unwrap();
-                if args.pretty {
-                    println!(
-                        "🔴 {} is TAKEN ({})",
-                        result.domain,
-                        format_domain_info(info)
-                    );
+            if args.info {
+                if let Some(info) = result.info.as_ref() {
+                    if args.pretty {
+                        println!(
+                            "🔴 {} is TAKEN ({})",
+                            result.domain,
+                            format_domain_info(info)
+                        );
+                    } else {
+                        println!("{} TAKEN ({})", result.domain, format_domain_info(info));
+                    }
+                } else if args.pretty {
+                    println!("🔴 {} is TAKEN", result.domain);
                 } else {
-                    println!("{} TAKEN ({})", result.domain, format_domain_info(info));
+                    println!("{} TAKEN", result.domain);
                 }
             } else if args.pretty {
                 println!("🔴 {} is TAKEN", result.domain);
@@ -1115,16 +1125,21 @@ fn display_text_results(
             }
             Some(false) => {
                 taken_count += 1;
-                if args.info && result.info.is_some() {
-                    let info = result.info.as_ref().unwrap();
-                    if args.pretty {
-                        println!(
-                            "🔴 {} is TAKEN ({})",
-                            result.domain,
-                            format_domain_info(info)
-                        );
+                if args.info {
+                    if let Some(info) = result.info.as_ref() {
+                        if args.pretty {
+                            println!(
+                                "🔴 {} is TAKEN ({})",
+                                result.domain,
+                                format_domain_info(info)
+                            );
+                        } else {
+                            println!("{} TAKEN ({})", result.domain, format_domain_info(info));
+                        }
+                    } else if args.pretty {
+                        println!("🔴 {} is TAKEN", result.domain);
                     } else {
-                        println!("{} TAKEN ({})", result.domain, format_domain_info(info));
+                        println!("{} TAKEN", result.domain);
                     }
                 } else if args.pretty {
                     println!("🔴 {} is TAKEN", result.domain);
