@@ -2,6 +2,8 @@
 
 Real-world examples and automation patterns for domain-check in professional environments.
 
+Related docs: [README](../README.md) | [CLI Reference](./CLI.md) | [Automation Guide](./AUTOMATION.md) | [FAQ](./FAQ.md)
+
 ## Table of Contents
 
 - [Developer Workflows](#developer-workflows)
@@ -10,6 +12,92 @@ Real-world examples and automation patterns for domain-check in professional env
 - [CI/CD Integration](#cicd-integration)
 - [Data Processing](#data-processing)
 - [Advanced Enterprise Scenarios](#advanced-enterprise-scenarios)
+- [Domain Generation](#domain-generation)
+
+---
+
+## Domain Generation
+
+### Pattern-Based Domain Discovery
+
+Find available domains using wildcard patterns — no external tools needed.
+
+```bash
+# Explore all 3-letter .com domains (dry run first to see count)
+domain-check --pattern "\w\w\w" -t com --dry-run 2>&1 | tail -1
+# 19683 domains would be checked
+
+# Actually check a smaller pattern
+domain-check --pattern "go\d" -t com,io --batch --json > go-domains.json
+
+# Find available 4-letter domains starting with "ai"
+domain-check --pattern "ai\w\w" -t com --yes --json | \
+  jq -r '.[] | select(.available==true) | .domain'
+```
+
+### Prefix/Suffix Brand Exploration
+
+```bash
+# Explore branding options for "cloud"
+domain-check cloud --prefix get,my,try,use --suffix hub,ly,app -t com --dry-run
+# 16 domains would be checked
+
+# Check them for real
+domain-check cloud --prefix get,my,try --suffix hub,ly -t com,io --pretty --batch
+```
+
+### AI Agent / Automation Integration
+
+domain-check is designed to be composable with AI agents and automation pipelines:
+
+```bash
+# Non-interactive: --yes skips confirmation, --json gives structured output
+domain-check --pattern "app\d" --prefix get -t com --yes --json | \
+  jq -r '.[] | select(.available==true) | .domain'
+
+# Piped output never prompts (non-TTY detection)
+domain-check --pattern "test\d\d" -t com --json | jq length
+
+# Dry-run for cost estimation before committing
+COUNT=$(domain-check --pattern "x\d\d" --prefix get,my --preset startup --dry-run 2>&1 | \
+  grep "domains would" | grep -o '[0-9]*')
+echo "Would check $COUNT domains"
+
+# Combine with file input + generation
+echo -e "myapp\ncoolsite" > names.txt
+domain-check --file names.txt --prefix get,try --suffix hub -t com --dry-run
+```
+
+### Team Workflow with Config Defaults
+
+Set up persistent generation defaults for your team:
+
+```toml
+# domain-check.toml (commit to repo)
+[defaults]
+concurrency = 30
+preset = "startup"
+pretty = true
+
+[generation]
+prefixes = ["get", "my", "try"]
+suffixes = ["hub", "app", "ly"]
+```
+
+```bash
+# Every team member automatically gets prefix/suffix expansion
+domain-check newfeature -t com
+# → getnewfeature.com, mynewfeature.com, trynewfeature.com,
+#   newfeaturehub.com, newfeatureapp.com, newfeaturely.com,
+#   newfeature.com
+
+# Override with CLI flags when needed
+domain-check newfeature --prefix super --suffix ai -t com
+# → supernewfeature.com, supernewfeatureai.com, newfeatureai.com, newfeature.com
+
+# Environment variables work too
+DC_PREFIX=cool,hot domain-check mysite -t com --dry-run
+```
 
 ---
 
@@ -22,10 +110,10 @@ Every developer needs to check domain availability when starting new projects. H
 ```bash
 # 1. Check your project name across essential TLDs
 domain-check myawesomeapp --preset startup --pretty
-# 🔴 myawesomeapp.com is TAKEN
-# 🟢 myawesomeapp.io is AVAILABLE  
-# 🟢 myawesomeapp.dev is AVAILABLE
-# 🟢 myawesomeapp.app is AVAILABLE
+# myawesomeapp.com TAKEN
+# myawesomeapp.io AVAILABLE
+# myawesomeapp.dev AVAILABLE
+# myawesomeapp.app AVAILABLE
 
 # 2. Check variations if the main name is taken
 echo "myawesomeapp
@@ -42,9 +130,9 @@ Before buying domains, verify they're actually available and get detailed info.
 ```bash
 # 1. Verify specific domains you want to buy
 domain-check myapp.com myapp.io myapp.dev --info --pretty
-# 🔴 myapp.com is TAKEN (Registrar: GoDaddy, Expires: 2025-12-15)
-# 🟢 myapp.io is AVAILABLE
-# 🟢 myapp.dev is AVAILABLE
+# myapp.com TAKEN (Registrar: GoDaddy, Expires: 2025-12-15)
+# myapp.io AVAILABLE
+# myapp.dev AVAILABLE
 
 # 2. Export results for decision making
 domain-check myapp.com myapp.io myapp.dev --info --csv > purchase-decision.csv
@@ -533,6 +621,63 @@ while IFS=',' read -r domain available method; do
   psql -d domains -c "INSERT INTO scans (domain, available, method, scan_date) 
                       VALUES ($domain, $available, $method, NOW());"
 done
+```
+
+---
+
+## Universal TLD Coverage
+
+With bootstrap enabled by default, domain-check can check domains across 1,200+ TLDs — virtually every TLD on the internet.
+
+### Full TLD Scan
+
+```bash
+# Scan a brand across every known TLD
+domain-check mybrand --all --json > full-scan.json
+
+# How many TLDs are available?
+jq '[.[] | select(.available==true)] | length' full-scan.json
+
+# Group results by availability
+jq -r '.[] | select(.available==true) | .domain' full-scan.json | wc -l
+jq -r '.[] | select(.available==false) | .domain' full-scan.json | wc -l
+```
+
+### Checking Uncommon TLDs
+
+Bootstrap handles TLDs that aren't in the hardcoded list — no special flags needed.
+
+```bash
+# These all work automatically via IANA bootstrap + WHOIS discovery
+domain-check example.museum
+domain-check example.photography
+domain-check example.restaurant
+domain-check mybrand -t com,io,dev,restaurant,photography,museum
+
+# For TLDs without RDAP, WHOIS server is discovered via IANA referral
+domain-check example.es    # .es has no RDAP — uses WHOIS automatically
+domain-check example.co    # .co WHOIS discovered via whois.iana.org
+```
+
+### Offline / Restricted Mode
+
+```bash
+# Disable bootstrap for deterministic, offline-capable checks
+# (limited to 32 hardcoded TLDs with known RDAP endpoints)
+domain-check myapp --all --no-bootstrap
+
+# Useful for CI environments with network restrictions
+DC_BOOTSTRAP=false domain-check --file domains.txt --preset startup --json
+```
+
+### Pre-warming the Bootstrap Cache
+
+```bash
+# The bootstrap cache is fetched on first use and cached for 24 hours.
+# For latency-sensitive workflows, the --all flag pre-warms the cache
+# before checking, so subsequent calls are instant.
+domain-check mybrand --all --json > /dev/null   # warms cache
+domain-check otherbrand --all --json             # uses cached data
 ```
 
 ---

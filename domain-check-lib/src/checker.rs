@@ -4,10 +4,11 @@
 //! domain availability checking using RDAP, WHOIS, and bootstrap protocols.
 
 use crate::error::DomainCheckError;
+use crate::protocols::registry::{extract_tld, get_whois_server};
 use crate::protocols::{RdapClient, WhoisClient};
 use crate::types::{CheckConfig, CheckMethod, DomainResult};
 use crate::utils::validate_domain;
-use futures::stream::{Stream, StreamExt};
+use futures_util::stream::{Stream, StreamExt};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -38,7 +39,10 @@ async fn check_single_domain_concurrent(
         Err(rdap_error) => {
             // RDAP failed, try WHOIS fallback if enabled
             if config.enable_whois_fallback {
-                match whois_client.check_domain(domain).await {
+                // Discover WHOIS server for targeted query
+                let whois_result = whois_with_discovery(domain, whois_client).await;
+
+                match whois_result {
                     Ok(whois_result) => {
                         let mut filtered_result = whois_result;
                         if !config.detailed_info {
@@ -92,6 +96,29 @@ async fn check_single_domain_concurrent(
     }
 }
 
+/// Perform WHOIS check with server discovery for targeted queries.
+///
+/// If the TLD's authoritative WHOIS server can be discovered via IANA referral,
+/// uses `whois -h <server> <domain>` for a more reliable query. Falls back to
+/// bare `whois <domain>` otherwise.
+async fn whois_with_discovery(
+    domain: &str,
+    whois_client: &WhoisClient,
+) -> Result<DomainResult, DomainCheckError> {
+    let tld = extract_tld(domain).ok();
+    let whois_server = if let Some(ref t) = tld {
+        get_whois_server(t).await
+    } else {
+        None
+    };
+
+    if let Some(server) = whois_server {
+        whois_client.check_domain_with_server(domain, &server).await
+    } else {
+        whois_client.check_domain(domain).await
+    }
+}
+
 /// Main domain checker that coordinates availability checking operations.
 ///
 /// The `DomainChecker` handles all aspects of domain checking including:
@@ -127,10 +154,10 @@ impl DomainChecker {
     /// Create a new domain checker with default configuration.
     ///
     /// Default settings:
-    /// - Concurrency: 10
+    /// - Concurrency: 20
     /// - Timeout: 5 seconds
     /// - WHOIS fallback: enabled
-    /// - Bootstrap: disabled
+    /// - Bootstrap: enabled
     /// - Detailed info: disabled
     pub fn new() -> Self {
         let config = CheckConfig::default();
@@ -210,7 +237,8 @@ impl DomainChecker {
             Err(rdap_error) => {
                 // RDAP failed, try WHOIS fallback if enabled
                 if self.config.enable_whois_fallback {
-                    match self.whois_client.check_domain(domain).await {
+                    // Use WHOIS with server discovery for targeted queries
+                    match whois_with_discovery(domain, &self.whois_client).await {
                         Ok(whois_result) => Ok(self.filter_result_info(whois_result)),
                         Err(whois_error) => {
                             // Both RDAP and WHOIS failed, determine best response
@@ -357,10 +385,10 @@ impl DomainChecker {
         // Extract results, converting errors to DomainResult with error info
         let results = indexed_results
             .into_iter()
-            .map(|(_, result)| match result {
+            .map(|(index, result)| match result {
                 Ok(domain_result) => domain_result,
                 Err(e) => DomainResult {
-                    domain: domains[0].clone(), // We'll fix this in the concurrent function
+                    domain: domains[index].clone(),
                     available: None,
                     info: None,
                     check_duration: None,
@@ -391,7 +419,7 @@ impl DomainChecker {
     ///
     /// ```rust,no_run
     /// use domain_check_lib::DomainChecker;
-    /// use futures::StreamExt;
+    /// use futures_util::StreamExt;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -416,7 +444,7 @@ impl DomainChecker {
         let semaphore = Arc::new(Semaphore::new(self.config.concurrency));
 
         // Create stream of futures
-        let stream = futures::stream::iter(domains)
+        let stream = futures_util::stream::iter(domains)
             .map(move |domain| {
                 let semaphore = Arc::clone(&semaphore);
                 let rdap_client = self.rdap_client.clone();
@@ -539,5 +567,193 @@ impl DomainChecker {
 impl Default for DomainChecker {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::DomainInfo;
+    use std::time::Duration;
+
+    // ── DomainChecker creation ──────────────────────────────────────────
+
+    #[test]
+    fn test_domain_checker_new() {
+        let checker = DomainChecker::new();
+        assert_eq!(checker.config().concurrency, 20);
+        assert!(checker.config().enable_whois_fallback);
+        assert!(checker.config().enable_bootstrap);
+        assert!(!checker.config().detailed_info);
+    }
+
+    #[test]
+    fn test_domain_checker_default() {
+        let checker = DomainChecker::default();
+        assert_eq!(checker.config().concurrency, 20);
+    }
+
+    #[test]
+    fn test_domain_checker_with_config() {
+        let config = CheckConfig::default()
+            .with_concurrency(50)
+            .with_timeout(Duration::from_secs(10))
+            .with_detailed_info(true)
+            .with_whois_fallback(false);
+
+        let checker = DomainChecker::with_config(config);
+        assert_eq!(checker.config().concurrency, 50);
+        assert_eq!(checker.config().timeout, Duration::from_secs(10));
+        assert!(checker.config().detailed_info);
+        assert!(!checker.config().enable_whois_fallback);
+    }
+
+    // ── config() and set_config() ───────────────────────────────────────
+
+    #[test]
+    fn test_config_accessor() {
+        let checker = DomainChecker::new();
+        let config = checker.config();
+        assert_eq!(config.concurrency, 20);
+    }
+
+    #[test]
+    fn test_set_config() {
+        let mut checker = DomainChecker::new();
+        assert_eq!(checker.config().concurrency, 20);
+
+        let new_config = CheckConfig::default().with_concurrency(75);
+        checker.set_config(new_config);
+        assert_eq!(checker.config().concurrency, 75);
+    }
+
+    // ── filter_result_info ──────────────────────────────────────────────
+
+    #[test]
+    fn test_filter_result_info_removes_when_disabled() {
+        let checker = DomainChecker::new(); // detailed_info = false by default
+        let result = DomainResult {
+            domain: "test.com".to_string(),
+            available: Some(false),
+            info: Some(DomainInfo {
+                registrar: Some("Test Registrar".to_string()),
+                ..Default::default()
+            }),
+            check_duration: None,
+            method_used: CheckMethod::Rdap,
+            error_message: None,
+        };
+
+        let filtered = checker.filter_result_info(result);
+        assert!(filtered.info.is_none());
+    }
+
+    #[test]
+    fn test_filter_result_info_preserves_when_enabled() {
+        let config = CheckConfig::default().with_detailed_info(true);
+        let checker = DomainChecker::with_config(config);
+
+        let result = DomainResult {
+            domain: "test.com".to_string(),
+            available: Some(false),
+            info: Some(DomainInfo {
+                registrar: Some("Test Registrar".to_string()),
+                ..Default::default()
+            }),
+            check_duration: None,
+            method_used: CheckMethod::Rdap,
+            error_message: None,
+        };
+
+        let filtered = checker.filter_result_info(result);
+        assert!(filtered.info.is_some());
+        assert_eq!(
+            filtered.info.unwrap().registrar,
+            Some("Test Registrar".to_string())
+        );
+    }
+
+    #[test]
+    fn test_filter_result_info_no_info_noop() {
+        let checker = DomainChecker::new();
+        let result = DomainResult {
+            domain: "test.com".to_string(),
+            available: Some(true),
+            info: None,
+            check_duration: None,
+            method_used: CheckMethod::Rdap,
+            error_message: None,
+        };
+
+        let filtered = checker.filter_result_info(result);
+        assert!(filtered.info.is_none());
+        assert_eq!(filtered.available, Some(true));
+    }
+
+    // ── check_domains with empty list ───────────────────────────────────
+
+    #[tokio::test]
+    async fn test_check_domains_empty_list() {
+        let checker = DomainChecker::new();
+        let results = checker.check_domains(&[]).await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ── check_domains_from_file errors ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_check_domains_from_nonexistent_file() {
+        let checker = DomainChecker::new();
+        let result = checker
+            .check_domains_from_file("/tmp/nonexistent_file_xyz_987.txt")
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_check_domains_from_empty_file() {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "# just a comment").unwrap();
+        writeln!(f).unwrap();
+        f.flush().unwrap();
+
+        let checker = DomainChecker::new();
+        let result = checker
+            .check_domains_from_file(f.path().to_str().unwrap())
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No valid domains"));
+    }
+
+    #[tokio::test]
+    async fn test_check_domains_from_file_parses_correctly() {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "# Header comment").unwrap();
+        writeln!(f, "example.com").unwrap();
+        writeln!(f).unwrap();
+        writeln!(f, "test.org  # inline comment").unwrap();
+        writeln!(f, "   ").unwrap();
+        writeln!(f, "short").unwrap(); // only 5 chars but >= 2 so it's valid
+        f.flush().unwrap();
+
+        // We can't actually check domains in tests (network), but we can
+        // verify the file parsing by checking that it doesn't error on
+        // "no valid domains" — meaning it found at least one valid domain.
+        // The actual network check will fail, but that's expected.
+        let checker = DomainChecker::new();
+        let result = checker
+            .check_domains_from_file(f.path().to_str().unwrap())
+            .await;
+        // It won't error with "No valid domains" — it will either succeed or
+        // fail on network. The file parsing itself worked.
+        if let Err(e) = &result {
+            assert!(
+                !e.to_string().contains("No valid domains"),
+                "File should have valid domains"
+            );
+        }
     }
 }

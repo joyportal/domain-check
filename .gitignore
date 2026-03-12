@@ -16,3 +16,14 @@ target/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/.DS_Store
 .DS_Store
+
+# Local development files
+CLAUDE.md
+\!docs/
+
+# Demo recording artifacts (keep .svg, ignore .cast)
+assets/*.cast
+assets/.demo-scenario.sh
+
+# Coverage reports
+coverage-report/

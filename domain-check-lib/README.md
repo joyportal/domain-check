@@ -1,25 +1,41 @@
 # domain-check-lib
 
-**A fast, robust Rust library for checking domain availability using RDAP and WHOIS protocols**
+Rust library for checking domain availability using RDAP and WHOIS protocols. The same engine that powers the [`domain-check`](https://crates.io/crates/domain-check) CLI.
 
 [![Crates.io](https://img.shields.io/crates/v/domain-check-lib.svg)](https://crates.io/crates/domain-check-lib)
 [![Documentation](https://docs.rs/domain-check-lib/badge.svg)](https://docs.rs/domain-check-lib)
 [![Downloads](https://img.shields.io/crates/d/domain-check-lib.svg)](https://crates.io/crates/domain-check-lib)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/saidutt46/domain-check#license)
 
----
+## Why use the library?
 
-## 🚀 Quick Start
+- **Domain registrar dashboards** — check availability in real time as users type
+- **SaaS platforms** — let customers claim a custom domain during onboarding
+- **Brand monitoring** — scan TLDs for trademark squatting on a schedule
+- **CI/CD pipelines** — validate domain ownership before deploy
+- **Bulk research tools** — check thousands of domains with streaming results
 
-Add to your `Cargo.toml`:
+## At a Glance
+
+- **1,200+ TLDs** via IANA bootstrap, 32 hardcoded as offline fallback
+- **Dual protocol** — RDAP-first with automatic WHOIS fallback via IANA server discovery
+- **Up to 100 concurrent checks** with configurable concurrency
+- **Streaming support** — process results as they arrive via `futures_util::Stream`
+- **Rich metadata** — registrar, creation/expiration dates, status codes, nameservers
+- **11 built-in TLD presets** — startup, tech, creative, finance, etc.
+- **Domain expansion** — expand base names across TLD lists automatically
+- **Comprehensive error types** — timeout, network, parse, bootstrap errors with recovery hints
+- **Pure async Rust** — built on tokio + reqwest, no OpenSSL dependency
+
+> Want a ready-to-use CLI instead? See [`domain-check`](https://crates.io/crates/domain-check).
+
+## Quick Start
 
 ```toml
 [dependencies]
-domain-check-lib = "0.5.0"
-tokio = { version = "1", features = ["full"] }
+domain-check-lib = "1.0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
-
-**Basic Example:**
 
 ```rust
 use domain_check_lib::DomainChecker;
@@ -28,51 +44,20 @@ use domain_check_lib::DomainChecker;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let checker = DomainChecker::new();
     let result = checker.check_domain("example.com").await?;
-    
+
     match result.available {
         Some(true) => println!("{} is AVAILABLE", result.domain),
         Some(false) => println!("{} is TAKEN", result.domain),
         None => println!("{} status is UNKNOWN", result.domain),
     }
-    
+
     Ok(())
 }
 ```
 
 ---
 
-## ✨ Key Features
-
-🦀 **Pure Async Rust** - Built with tokio for high performance  
-🌐 **Dual Protocol Support** - RDAP-first with WHOIS fallback  
-⚡ **Concurrent Processing** - Check multiple domains simultaneously  
-🎯 **30+ TLD Mappings** - Accurate results across major registries  
-🛡️ **Robust Error Handling** - Comprehensive error types with recovery  
-📊 **Detailed Information** - Extract registrar, dates, and status codes  
-🔄 **Streaming Support** - Real-time results for bulk operations  
-
----
-
-## 📚 Usage Examples
-
-### Single Domain Check
-
-```rust
-use domain_check_lib::{DomainChecker, CheckConfig};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let checker = DomainChecker::new();
-    
-    let result = checker.check_domain("google.com").await?;
-    
-    println!("Domain: {}", result.domain);
-    println!("Available: {:?}", result.available);
-    println!("Method used: {}", result.method_used);
-    
-    Ok(())
-}
-```
+## Usage Examples
 
 ### Bulk Domain Checking
 
@@ -84,33 +69,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = CheckConfig::default()
         .with_concurrency(20)
         .with_detailed_info(true);
-    
+
     let checker = DomainChecker::with_config(config);
     let domains = vec![
         "example.com".to_string(),
         "google.org".to_string(),
         "github.io".to_string(),
     ];
-    
+
     let results = checker.check_domains(&domains).await?;
-    
+
     for result in results {
         match result.available {
-            Some(true) => println!("✅ {} is available", result.domain),
-            Some(false) => println!("❌ {} is taken", result.domain),
-            None => println!("❓ {} status unknown", result.domain),
+            Some(true) => println!("{} is available", result.domain),
+            Some(false) => println!("{} is taken", result.domain),
+            None => println!("{} status unknown", result.domain),
         }
     }
-    
+
     Ok(())
 }
 ```
 
-### Streaming Results (Real-time)
+### Streaming Results
 
 ```rust
 use domain_check_lib::DomainChecker;
-use futures::StreamExt;
+use futures_util::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -120,20 +105,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "startup.org".to_string(),
         "mybrand.net".to_string(),
     ];
-    
+
     let mut stream = checker.check_domains_stream(&domains);
-    
+
     while let Some(result) = stream.next().await {
         match result {
-            Ok(domain_result) => {
-                println!("✓ {}: {:?}", domain_result.domain, domain_result.available);
-            }
-            Err(e) => {
-                eprintln!("✗ Error: {}", e);
-            }
+            Ok(r) => println!("{}: {:?}", r.domain, r.available),
+            Err(e) => eprintln!("Error: {}", e),
         }
     }
-    
+
     Ok(())
 }
 ```
@@ -144,246 +125,77 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use domain_check_lib::{DomainChecker, CheckConfig};
 use std::time::Duration;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = CheckConfig::default()
-        .with_concurrency(50)                          // Max 50 concurrent checks
-        .with_timeout(Duration::from_secs(10))         // 10 second timeout
-        .with_whois_fallback(true)                     // Enable WHOIS fallback
-        .with_bootstrap(true)                          // Use IANA bootstrap
-        .with_detailed_info(true);                     // Extract full domain info
-    
-    let checker = DomainChecker::with_config(config);
-    let result = checker.check_domain("example.com").await?;
-    
-    if let Some(duration) = result.check_duration {
-        println!("Checked in {}ms via {}", 
-            duration.as_millis(), 
-            result.method_used
-        );
-    }
-    
-    Ok(())
-}
-```
-
-### **🆕 TLD Management (v0.5.0)**
-
-The library now provides direct access to TLD knowledge for building domain exploration tools:
-
-```rust
-use domain_check_lib::{get_all_known_tlds, get_preset_tlds, get_available_presets};
-
-#[tokio::main] 
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Get all TLDs with RDAP endpoints
-    let all_tlds = get_all_known_tlds();
-    println!("Checking across {} TLDs", all_tlds.len()); // ~42 TLDs
-    
-    // Use curated presets for common scenarios
-    let startup_tlds = get_preset_tlds("startup").unwrap();
-    println!("Startup TLDs: {:?}", startup_tlds); // 8 tech-focused TLDs
-    
-    // List available presets
-    let presets = get_available_presets();
-    println!("Available presets: {:?}", presets); // ["startup", "enterprise", "country"]
-    
-    Ok(())
-}
-```
-
-### **Smart Domain Expansion**
-
-Combine TLD management with domain expansion for powerful bulk operations:
-
-```rust
-use domain_check_lib::{DomainChecker, get_preset_tlds, expand_domain_inputs};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let checker = DomainChecker::new();
-    
-    // Define base domain names
-    let base_names = vec!["myapp".to_string(), "mystartup".to_string()];
-    
-    // Expand with startup-focused TLDs
-    let startup_tlds = get_preset_tlds("startup");
-    let domains = expand_domain_inputs(&base_names, &startup_tlds);
-    // Results in: myapp.com, myapp.io, myapp.ai, etc.
-    
-    // Check all expanded domains
-    let results = checker.check_domains(&domains).await?;
-    
-    // Filter for available domains
-    let available: Vec<_> = results
-        .iter()
-        .filter(|r| r.available == Some(true))
-        .collect();
-        
-    println!("Found {} available domains", available.len());
-    
-    Ok(())
-}
-```
-
-🌐 **TLD Management**: Access to 40+ known TLDs and curated presets  
-🎯 **Smart Expansion**: Intelligent domain name expansion with preset integration  
-📊 **Enhanced Results**: Improved error context and domain information
-
-### **Universal TLD Checking**
-
-```rust
-use domain_check_lib::{DomainChecker, get_all_known_tlds};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let checker = DomainChecker::new();
-    
-    // Check against all known TLDs
-    let all_tlds = get_all_known_tlds();
-    let domains = domain_check_lib::expand_domain_inputs(
-        &["myapp".to_string()], 
-        &Some(all_tlds)
-    );
-    
-    println!("Checking {} domains across all TLDs", domains.len());
-    
-    let results = checker.check_domains(&domains).await?;
-    
-    // Analyze results
-    let available_count = results.iter().filter(|r| r.available == Some(true)).count();
-    let taken_count = results.iter().filter(|r| r.available == Some(false)).count();
-    
-    println!("Results: {} available, {} taken", available_count, taken_count);
-    
-    Ok(())
-}
-```
-
-### File-based Processing
-
-```rust
-use domain_check_lib::DomainChecker;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let checker = DomainChecker::new();
-    
-    // Process domains from a file (one domain per line)
-    let results = checker.check_domains_from_file("domains.txt").await?;
-    
-    let available_domains: Vec<_> = results
-        .iter()
-        .filter(|r| r.available == Some(true))
-        .collect();
-    
-    println!("Found {} available domains out of {}", 
-        available_domains.len(), 
-        results.len()
-    );
-    
-    for domain in available_domains {
-        println!("✅ {}", domain.domain);
-    }
-    
-    Ok(())
-}
-```
-
----
-
-## 🔧 Configuration Options
-
-The `CheckConfig` struct provides extensive configuration:
-
-```rust
-use domain_check_lib::CheckConfig;
-use std::time::Duration;
-
 let config = CheckConfig::default()
-    .with_concurrency(25)                    // Concurrent requests (1-100)
-    .with_timeout(Duration::from_secs(8))    // Per-domain timeout
-    .with_whois_fallback(true)               // Enable WHOIS fallback
-    .with_bootstrap(false)                   // IANA bootstrap lookup
-    .with_detailed_info(true)                // Extract registrar details
-    .with_tlds(vec![                         // Default TLDs for expansion
-        "com".to_string(),
-        "org".to_string(),
-        "net".to_string()
-    ]);
+    .with_concurrency(50)                          // Max 50 concurrent checks
+    .with_timeout(Duration::from_secs(10))         // 10 second timeout
+    .with_whois_fallback(true)                     // Enable WHOIS fallback
+    .with_bootstrap(true)                          // Use IANA bootstrap
+    .with_detailed_info(true);                     // Extract full domain info
+
+let checker = DomainChecker::with_config(config);
 ```
 
----
-
-## 📊 Data Structures
-
-### DomainResult
+### TLD Management & Domain Expansion
 
 ```rust
-pub struct DomainResult {
-    pub domain: String,              // Domain that was checked
-    pub available: Option<bool>,     // true = available, false = taken, None = unknown
-    pub info: Option<DomainInfo>,    // Detailed registration info (if available)
-    pub check_duration: Option<Duration>, // How long the check took
-    pub method_used: CheckMethod,    // RDAP, WHOIS, or Bootstrap
-    pub error_message: Option<String>, // Error details (if applicable)
+use domain_check_lib::{
+    DomainChecker, get_all_known_tlds, get_preset_tlds,
+    initialize_bootstrap, expand_domain_inputs,
+};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let checker = DomainChecker::new();
+
+    // Pre-warm the IANA bootstrap cache for full TLD coverage
+    initialize_bootstrap().await?;
+
+    // Get all known TLDs (1,200+ after bootstrap, 32 hardcoded offline)
+    let all_tlds = get_all_known_tlds();
+    println!("Loaded {} TLDs", all_tlds.len());
+
+    // Or use curated presets (11 built-in: startup, popular, tech, creative, etc.)
+    let startup_tlds = get_preset_tlds("startup");
+
+    // Expand base names with TLDs
+    let domains = expand_domain_inputs(
+        &["myapp".to_string(), "mystartup".to_string()],
+        &startup_tlds,
+    );
+    // → myapp.com, myapp.io, myapp.ai, ..., mystartup.com, ...
+
+    let results = checker.check_domains(&domains).await?;
+    let available: Vec<_> = results.iter()
+        .filter(|r| r.available == Some(true))
+        .collect();
+
+    println!("Found {} available domains", available.len());
+    Ok(())
 }
 ```
 
-### DomainInfo
+### Bootstrap & WHOIS Discovery
 
 ```rust
-pub struct DomainInfo {
-    pub registrar: Option<String>,      // Domain registrar
-    pub creation_date: Option<String>,  // When domain was registered
-    pub expiration_date: Option<String>, // When domain expires
-    pub status: Vec<String>,            // Domain status codes
-    pub updated_date: Option<String>,   // Last update date
-    pub nameservers: Vec<String>,       // Associated nameservers
+use domain_check_lib::{initialize_bootstrap, get_whois_server};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load 1,200+ TLDs from the IANA RDAP bootstrap registry
+    initialize_bootstrap().await?;
+
+    // Discover authoritative WHOIS servers for any TLD via IANA referral
+    if let Some(server) = get_whois_server("com").await {
+        println!(".com WHOIS server: {}", server); // → whois.verisign-grs.com
+    }
+
+    Ok(())
 }
 ```
 
 ---
 
-## 🌐 Protocol Support
-
-### RDAP (Primary)
-
-- **Modern Protocol**: Structured JSON responses
-- **30+ TLD Mappings**: Major registries supported
-- **Rich Data**: Registrar info, dates, status codes
-- **Performance**: Fast, reliable responses
-
-### WHOIS (Fallback)
-
-- **Universal Coverage**: Works with most TLDs
-- **Automatic Parsing**: Intelligent response interpretation
-- **Rate Limiting**: Built-in throttling protection
-- **Error Recovery**: Smart fallback logic
-
-### Bootstrap Discovery
-
-- **IANA Registry**: Dynamic endpoint discovery
-- **Unknown TLDs**: Automatic protocol detection
-- **Future Proof**: Adapts to new registries
-
----
-
-## 🚀 Performance
-
-Domain Check is optimized for high-performance operations:
-
-- **Concurrent Processing**: Configurable parallelism (1-100 concurrent requests)
-- **Connection Reuse**: HTTP client connection pooling
-- **Smart Timeouts**: Registry-specific timeout optimization
-- **Memory Efficient**: Streaming results for large datasets
-- **Protocol Selection**: Intelligent RDAP/WHOIS routing
-
----
-
-## 🛡️ Error Handling
-
-Comprehensive error types with automatic recovery:
+## Error Handling
 
 ```rust
 use domain_check_lib::DomainCheckError;
@@ -405,23 +217,57 @@ match checker.check_domain("invalid-domain").await {
 
 ---
 
-## 🔗 Related Projects
+## Data Structures
 
-- **CLI Tool**: [`domain-check`](https://crates.io/crates/domain-check) - Command-line interface
-- **Repository**: [GitHub](https://github.com/saidutt46/domain-check) - Source code and issues
+### DomainResult
+
+```rust
+pub struct DomainResult {
+    pub domain: String,                    // Domain that was checked
+    pub available: Option<bool>,           // true = available, false = taken, None = unknown
+    pub info: Option<DomainInfo>,          // Detailed registration info
+    pub check_duration: Option<Duration>,  // How long the check took
+    pub method_used: CheckMethod,          // RDAP, WHOIS, or Bootstrap
+    pub error_message: Option<String>,     // Error details (if applicable)
+}
+```
+
+### DomainInfo
+
+```rust
+pub struct DomainInfo {
+    pub registrar: Option<String>,
+    pub creation_date: Option<String>,
+    pub expiration_date: Option<String>,
+    pub status: Vec<String>,
+    pub updated_date: Option<String>,
+    pub nameservers: Vec<String>,
+}
+```
 
 ---
 
-## 📝 License
+## Protocol Support
 
-This project is licensed under the Apache License, Version 2.0 - see the [LICENSE](../LICENSE) file for details.
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please see the [Contributing Guide](../CONTRIBUTING.md) for details.
+| Protocol | Role | Details |
+|----------|------|---------|
+| **RDAP** | Primary | Structured JSON responses, 1,180+ TLDs via IANA bootstrap, rich data |
+| **WHOIS** | Fallback | Targeted queries via IANA server discovery, smart parsing, rate limiting |
+| **Bootstrap** | Discovery | Bulk IANA registry fetch (enabled by default), 24h cache, zero maintenance |
 
 ---
 
-*Built with ❤️ in Rust*
+## Related
+
+- **CLI Tool**: [`domain-check`](https://crates.io/crates/domain-check) — command-line interface
+- **Repository**: [GitHub](https://github.com/saidutt46/domain-check)
+- **Docs Index**: [`docs/README.md`](../docs/README.md)
+- **FAQ**: [`docs/FAQ.md`](../docs/FAQ.md)
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](../LICENSE-APACHE) or [MIT License](../LICENSE-MIT) at your option.
+
+## Contributing
+
+Contributions welcome. See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for setup and workflow.

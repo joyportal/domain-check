@@ -3,112 +3,157 @@
 //! A command-line interface for checking domain availability using RDAP and WHOIS protocols.
 //! This CLI application provides a user-friendly interface to the domain-check-lib library.
 
+mod ui;
+
 use clap::Parser;
-use domain_check_lib::{get_all_known_tlds, get_preset_tlds, get_preset_tlds_with_custom};
+use console::Term;
+use domain_check_lib::{
+    get_all_known_tlds, get_available_presets, get_preset_tlds, get_preset_tlds_with_custom,
+    initialize_bootstrap,
+};
 use domain_check_lib::{load_env_config, ConfigManager, FileConfig};
 use domain_check_lib::{CheckConfig, DomainChecker};
+use std::io::BufRead;
 use std::process;
 
 /// CLI arguments for domain-check
 #[derive(Parser, Debug)]
 #[command(name = "domain-check")]
-#[command(version = "0.6.0")]
-#[command(author = "Sai Dutt G.V <gvs46@protonmail.com>")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Check domain availability using RDAP with WHOIS fallback")]
-#[command(
-    long_about = "A fast, robust CLI tool for checking domain availability using RDAP protocol with automatic WHOIS fallback. 
-
-Features real-time progress updates and concurrent processing for multiple domains."
-)]
+#[command(disable_help_flag = true)]
 pub struct Args {
-    /// Domain names to check (supports both base names and FQDNs)
-    #[arg(value_name = "DOMAINS")]
+    /// Show this help message
+    #[arg(short = 'h', long = "help", action = clap::ArgAction::SetTrue, global = true)]
+    pub help: bool,
+
+    /// Domain names to check (base names or FQDNs)
+    #[arg(value_name = "DOMAINS", help_heading = "Domain Selection")]
     pub domains: Vec<String>,
 
-    /// TLDs to check for base domain names (comma-separated or multiple -t flags)
-    #[arg(short = 't', long = "tld", value_name = "TLD", value_delimiter = ',', action = clap::ArgAction::Append)]
+    /// TLDs to check (comma-separated or multiple -t flags)
+    #[arg(short = 't', long = "tld", value_name = "TLD", value_delimiter = ',', action = clap::ArgAction::Append, help_heading = "Domain Selection")]
     pub tlds: Option<Vec<String>>,
 
-    /// Check against all known TLDs (~42 TLDs)
-    #[arg(long = "all", help = "Check against all known TLDs")]
+    /// Check against all known TLDs
+    #[arg(long = "all", help_heading = "Domain Selection")]
     pub all_tlds: bool,
 
-    /// Use predefined TLD presets
+    /// Use a predefined TLD preset (use --list-presets to see all)
     #[arg(
         long = "preset",
         value_name = "NAME",
-        help = "Use TLD preset:\n  startup (8): com, org, io, ai, tech, app, dev, xyz\n  enterprise (6): com, org, net, info, biz, us\n  country (9): us, uk, de, fr, ca, au, jp, br, in"
+        help_heading = "Domain Selection"
     )]
     pub preset: Option<String>,
 
-    /// Input file with domains to check (one per line)
-    #[arg(short = 'f', long = "file", value_name = "FILE")]
+    /// List all available TLD presets and exit
+    #[arg(long = "list-presets", help_heading = "Domain Selection")]
+    pub list_presets: bool,
+
+    /// Input file with domains (one per line)
+    #[arg(
+        short = 'f',
+        long = "file",
+        value_name = "FILE",
+        help_heading = "Domain Selection"
+    )]
     pub file: Option<String>,
 
-    /// Use specific config file instead of automatic discovery
+    /// Pattern for name generation (\w=letter, \d=digit, ?=either)
     #[arg(
-        long = "config",
-        value_name = "FILE",
-        help = "Use specific config file"
+        long = "pattern",
+        value_name = "PATTERN",
+        value_delimiter = ',',
+        help_heading = "Domain Generation"
     )]
-    pub config: Option<String>,
+    pub patterns: Option<Vec<String>>,
 
-    /// Max concurrent domain checks (default: 20, max: 100)
-    #[arg(short = 'c', long = "concurrency", default_value = "20")]
-    pub concurrency: usize,
+    /// Prefixes to prepend to domain names (comma-separated)
+    #[arg(
+        long = "prefix",
+        value_name = "PREFIX",
+        value_delimiter = ',',
+        help_heading = "Domain Generation"
+    )]
+    pub prefixes: Option<Vec<String>>,
 
-    /// Override the 500 domain limit for bulk operations
-    #[arg(long = "force")]
-    pub force: bool,
+    /// Suffixes to append to domain names (comma-separated)
+    #[arg(
+        long = "suffix",
+        value_name = "SUFFIX",
+        value_delimiter = ',',
+        help_heading = "Domain Generation"
+    )]
+    pub suffixes: Option<Vec<String>>,
 
-    /// Show detailed domain information when available
-    #[arg(short = 'i', long = "info")]
-    pub info: bool,
-
-    /// Use IANA bootstrap to find RDAP endpoints for unknown TLDs
-    #[arg(short = 'b', long = "bootstrap")]
-    pub bootstrap: bool,
-
-    /// Disable automatic WHOIS fallback
-    #[arg(long = "no-whois")]
-    pub no_whois: bool,
+    /// Preview generated domains without checking availability
+    #[arg(long = "dry-run", help_heading = "Domain Generation")]
+    pub dry_run: bool,
 
     /// Output results in JSON format
-    #[arg(short = 'j', long = "json")]
+    #[arg(short = 'j', long = "json", help_heading = "Output Format")]
     pub json: bool,
 
     /// Output results in CSV format
-    #[arg(long = "csv")]
+    #[arg(long = "csv", help_heading = "Output Format")]
     pub csv: bool,
 
-    /// Enable colorful, formatted output
-    #[arg(short = 'p', long = "pretty")]
+    /// Enable grouped, structured output with section headers
+    #[arg(short = 'p', long = "pretty", help_heading = "Output Format")]
     pub pretty: bool,
 
-    /// Force batch mode (collect all results first)
-    #[arg(
-        long = "batch",
-        help = "Force batch mode - collect all results before displaying"
-    )]
+    /// Show detailed domain information when available
+    #[arg(short = 'i', long = "info", help_heading = "Output Format")]
+    pub info: bool,
+
+    /// Collect all results before displaying
+    #[arg(long = "batch", help_heading = "Output Format")]
     pub batch: bool,
 
-    /// Force streaming mode (show results as ready)
-    #[arg(
-        long = "streaming",
-        help = "Force streaming mode - show results as they complete"
-    )]
+    /// Show results as they complete
+    #[arg(long = "streaming", help_heading = "Output Format")]
     pub streaming: bool,
 
+    /// Max concurrent domain checks (default: 20, max: 100)
+    #[arg(
+        short = 'c',
+        long = "concurrency",
+        default_value = "20",
+        help_heading = "Performance"
+    )]
+    pub concurrency: usize,
+
+    /// Override the 5000 domain limit for bulk operations
+    #[arg(long = "force", help_heading = "Performance")]
+    pub force: bool,
+
+    /// Skip confirmation prompts (for automation/agents)
+    #[arg(long = "yes", short = 'y', help_heading = "Performance")]
+    pub yes: bool,
+
+    /// Disable IANA bootstrap (use only hardcoded TLDs for RDAP)
+    #[arg(long = "no-bootstrap", help_heading = "Protocol")]
+    pub no_bootstrap: bool,
+
+    /// Disable automatic WHOIS fallback
+    #[arg(long = "no-whois", help_heading = "Protocol")]
+    pub no_whois: bool,
+
+    /// Use specific config file instead of automatic discovery
+    #[arg(long = "config", value_name = "FILE", help_heading = "Configuration")]
+    pub config: Option<String>,
+
     /// Show detailed debug information and error messages
-    #[arg(short = 'd', long = "debug")]
+    #[arg(short = 'd', long = "debug", help_heading = "Configuration")]
     pub debug: bool,
 
     /// Verbose logging
-    #[arg(short = 'v', long = "verbose")]
+    #[arg(short = 'v', long = "verbose", help_heading = "Configuration")]
     pub verbose: bool,
 }
 
-/// Error statistics for aggregated reporting
+/// Error statistics for aggregated reporting in streaming mode.
 #[derive(Debug, Default)]
 struct ErrorStats {
     timeouts: Vec<String>,
@@ -122,7 +167,7 @@ impl ErrorStats {
     fn add_error(&mut self, domain: &str, error: &domain_check_lib::DomainCheckError) {
         match error {
             domain_check_lib::DomainCheckError::Timeout { .. } => {
-                self.timeouts.push(domain.to_string()); // Full domain name
+                self.timeouts.push(domain.to_string());
             }
             domain_check_lib::DomainCheckError::NetworkError { .. } => {
                 self.network_errors.push(domain.to_string());
@@ -132,12 +177,6 @@ impl ErrorStats {
             }
             domain_check_lib::DomainCheckError::BootstrapError { .. } => {
                 self.unknown_tld_errors.push(domain.to_string());
-            }
-            domain_check_lib::DomainCheckError::RdapError { .. } => {
-                self.other_errors.push(domain.to_string());
-            }
-            domain_check_lib::DomainCheckError::WhoisError { .. } => {
-                self.other_errors.push(domain.to_string());
             }
             _ => {
                 self.other_errors.push(domain.to_string());
@@ -160,7 +199,6 @@ impl ErrorStats {
 
         let mut summary = vec!["⚠️  Some domains could not be checked:".to_string()];
 
-        // Helper function to format domain list with smart truncation
         let format_domain_list = |domains: &[String], max_show: usize| -> String {
             if domains.len() <= max_show {
                 domains.join(", ")
@@ -172,52 +210,46 @@ impl ErrorStats {
         };
 
         if !self.timeouts.is_empty() {
-            let domain_list = format_domain_list(&self.timeouts, 5); // Show max 5, then "and X more"
             summary.push(format!(
                 "• {} timeouts: {}",
                 self.timeouts.len(),
-                domain_list
+                format_domain_list(&self.timeouts, 5)
             ));
         }
 
         if !self.network_errors.is_empty() {
-            let domain_list = format_domain_list(&self.network_errors, 5);
             summary.push(format!(
                 "• {} network errors: {}",
                 self.network_errors.len(),
-                domain_list
+                format_domain_list(&self.network_errors, 5)
             ));
         }
 
         if !self.parsing_errors.is_empty() {
-            let domain_list = format_domain_list(&self.parsing_errors, 5);
             summary.push(format!(
                 "• {} parsing errors: {}",
                 self.parsing_errors.len(),
-                domain_list
+                format_domain_list(&self.parsing_errors, 5)
             ));
         }
 
         if !self.unknown_tld_errors.is_empty() {
-            let domain_list = format_domain_list(&self.unknown_tld_errors, 5);
             summary.push(format!(
                 "• {} unknown TLD errors: {}",
                 self.unknown_tld_errors.len(),
-                domain_list
+                format_domain_list(&self.unknown_tld_errors, 5)
             ));
         }
 
         if !self.other_errors.is_empty() {
-            let domain_list = format_domain_list(&self.other_errors, 5);
             summary.push(format!(
                 "• {} other errors: {}",
                 self.other_errors.len(),
-                domain_list
+                format_domain_list(&self.other_errors, 5)
             ));
         }
 
-        // Add retry information in debug mode
-        if args.debug && self.has_errors() {
+        if args.debug {
             summary.push("• All errors attempted WHOIS fallback where possible".to_string());
         }
 
@@ -225,7 +257,6 @@ impl ErrorStats {
     }
 }
 
-// HELPER FUNCTION to categorize errors from error messages
 fn categorize_error_from_message(error_msg: &str) -> domain_check_lib::DomainCheckError {
     let msg_lower = error_msg.to_lowercase();
 
@@ -258,15 +289,30 @@ fn categorize_error_from_message(error_msg: &str) -> domain_check_lib::DomainChe
 async fn main() {
     let args = Args::parse();
 
+    // Handle --help before anything else
+    if args.help {
+        ui::print_custom_help();
+        return;
+    }
+
     // Validate arguments
     if let Err(e) = validate_args(&args) {
         eprintln!("Error: {}", e);
         process::exit(1);
     }
 
+    // Handle --list-presets early
+    if args.list_presets {
+        print_presets();
+        return;
+    }
+
     // Set up logging if verbose
     if args.verbose {
-        println!("🔧 Domain Check CLI v0.4.0 starting...");
+        println!(
+            "🔧 Domain Check CLI v{} starting...",
+            env!("CARGO_PKG_VERSION")
+        );
     }
 
     // Run the domain checking
@@ -274,13 +320,26 @@ async fn main() {
         eprintln!("Error: {}", e);
         process::exit(1);
     }
+
+    // Force immediate exit to avoid hanging on reqwest's connection pool cleanup.
+    // Without this, background tokio tasks from reqwest's HTTP client keep the
+    // runtime alive for several seconds after all work is done.
+    process::exit(0);
 }
 
 /// Validate command line arguments
 fn validate_args(args: &Args) -> Result<(), String> {
-    // Must have either domains or file
-    if args.domains.is_empty() && args.file.is_none() {
-        return Err("You must specify either domain names or a file with --file".to_string());
+    // --list-presets is self-contained, skip other validation
+    if args.list_presets {
+        return Ok(());
+    }
+
+    // Must have either domains, file, or patterns
+    if args.domains.is_empty() && args.file.is_none() && args.patterns.is_none() {
+        return Err(
+            "You must specify domain names, a file with --file, or patterns with --pattern"
+                .to_string(),
+        );
     }
 
     // Can't have conflicting output modes
@@ -292,6 +351,14 @@ fn validate_args(args: &Args) -> Result<(), String> {
     let output_formats = [args.json, args.csv].iter().filter(|&&x| x).count();
     if output_formats > 1 {
         return Err("Cannot specify multiple output formats (--json, --csv)".to_string());
+    }
+
+    // Streaming mode doesn't support structured output formats
+    if args.streaming && (args.json || args.csv) {
+        return Err(
+            "Cannot use --streaming with --json or --csv. Use --batch for structured output"
+                .to_string(),
+        );
     }
 
     // Validate concurrency
@@ -315,23 +382,110 @@ fn validate_args(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
-/// Determine if bootstrap should be auto-enabled
-fn should_enable_bootstrap(args: &Args, resolved_tlds: &Option<Vec<String>>) -> bool {
-    // --all needs bootstrap for comprehensive coverage
-    args.bootstrap || args.all_tlds || resolved_tlds.as_ref().is_some_and(|tlds| tlds.len() > 20)
-    // Large sets likely need bootstrap
+/// Print all available TLD presets with their TLDs, then exit.
+fn print_presets() {
+    use console::Style;
+
+    let heading = Style::new().yellow().bold();
+    let name_style = Style::new().green().bold();
+    let count_style = Style::new().cyan();
+
+    println!();
+    println!("{}", heading.apply_to("Available TLD Presets:"));
+    println!();
+
+    for preset_name in get_available_presets() {
+        if let Some(tlds) = get_preset_tlds(preset_name) {
+            let tld_list = tlds.join(", ");
+            println!(
+                "  {} {}  {}",
+                name_style.apply_to(format!("{:<12}", preset_name)),
+                count_style.apply_to(format!("({})", tlds.len())),
+                tld_list,
+            );
+        }
+    }
+
+    println!();
+    println!("Use: domain-check <name> --preset <preset>");
+}
+
+/// Determine if bootstrap should be enabled.
+///
+/// Bootstrap is now enabled by default. It can be disabled with `--no-bootstrap`.
+fn should_enable_bootstrap(args: &Args, _resolved_tlds: &Option<Vec<String>>) -> bool {
+    if args.no_bootstrap {
+        return false;
+    }
+    // Bootstrap is enabled by default; --bootstrap flag is now a no-op
+    true
 }
 
 /// Main domain checking logic
-async fn run_domain_check(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_domain_check(mut args: Args) -> Result<(), Box<dyn std::error::Error>> {
+    // Pre-warm bootstrap cache if --all mode is requested (so get_all_known_tlds()
+    // returns the full ~1,180 TLDs from IANA, not just the 32 hardcoded ones)
+    if args.all_tlds && !args.no_bootstrap {
+        if args.verbose {
+            println!("Fetching IANA bootstrap registry for full TLD coverage...");
+        }
+        if let Err(e) = initialize_bootstrap().await {
+            if args.verbose {
+                eprintln!(
+                    "Warning: Bootstrap fetch failed ({}), using hardcoded TLDs",
+                    e
+                );
+            }
+            // Graceful degradation: continue with hardcoded 32 TLDs
+        }
+    }
+
     // Build configuration from CLI args
     let config = build_config(&args)?;
 
-    // Create domain checker
-    let checker = DomainChecker::with_config(config.clone());
+    // Propagate resolved config values back to args for display logic.
+    // This ensures config/env settings for --info are respected in output formatting.
+    args.info = config.detailed_info;
 
     // Determine domains to check (pass the config instead of rebuilding)
     let domains = get_domains_to_check(&args, &config).await?;
+
+    // Dry-run: print domains and exit without checking
+    if args.dry_run {
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&domains)?);
+        } else {
+            for d in &domains {
+                println!("{}", d);
+            }
+        }
+        eprintln!("{} domains would be checked", domains.len());
+        return Ok(());
+    }
+
+    // Interactive confirmation for large runs (TTY only)
+    if domains.len() > 5000 && !args.force && !args.yes {
+        let term = Term::stderr();
+        if term.is_term() {
+            let estimated_secs = (domains.len() as f64 / config.concurrency as f64) * 1.0;
+            eprint!(
+                "Will check {} domains (~{:.0}s at concurrency {}). Proceed? [Y/n] ",
+                domains.len(),
+                estimated_secs,
+                config.concurrency
+            );
+            let mut input = String::new();
+            std::io::stdin().lock().read_line(&mut input)?;
+            let answer = input.trim().to_lowercase();
+            if answer == "n" || answer == "no" {
+                eprintln!("Aborted.");
+                return Ok(());
+            }
+        }
+    }
+
+    // Create domain checker
+    let checker = DomainChecker::with_config(config.clone());
 
     // Decide on processing mode based on domain count and user preferences
     let use_streaming = should_use_streaming(&args, domains.len());
@@ -375,10 +529,12 @@ async fn run_streaming_check(
     args: &Args,
     tlds: &Option<Vec<String>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use futures::StreamExt;
+    use futures_util::StreamExt;
 
     // Show initial progress message
-    if args.verbose || args.pretty {
+    if args.pretty {
+        ui::print_header(domains.len(), checker.config().concurrency, args);
+    } else if args.verbose {
         println!(
             "🔍 Checking {} domains with concurrency: {}",
             domains.len(),
@@ -412,35 +568,33 @@ async fn run_streaming_check(
     let mut unknown_count = 0;
     let mut results = Vec::new();
     let mut error_stats = ErrorStats::default();
+    let mut completed = 0usize;
+    let total = domains.len();
 
     let start_time = std::time::Instant::now();
 
-    // NEW APPROACH: Process each domain individually to preserve context
-    // Instead of using the stream directly, we'll create our own stream with domain context
+    // Process each domain individually to preserve context
     let domain_futures = domains.iter().map(|domain| {
         let domain = domain.clone();
-        let checker = checker.clone(); // DomainChecker implements Clone
+        let checker = checker.clone();
         async move {
             match checker.check_domain(&domain).await {
                 Ok(result) => result,
-                Err(e) => {
-                    // Convert error to DomainResult with domain context preserved
-                    domain_check_lib::DomainResult {
-                        domain: domain.clone(),
-                        available: None,
-                        info: None,
-                        check_duration: None,
-                        method_used: domain_check_lib::CheckMethod::Unknown,
-                        error_message: Some(e.to_string()),
-                    }
-                }
+                Err(e) => domain_check_lib::DomainResult {
+                    domain: domain.clone(),
+                    available: None,
+                    info: None,
+                    check_duration: None,
+                    method_used: domain_check_lib::CheckMethod::Unknown,
+                    error_message: Some(e.to_string()),
+                },
             }
         }
     });
 
     // Use buffer_unordered to maintain concurrency while preserving domain context
     let mut stream =
-        futures::stream::iter(domain_futures).buffer_unordered(checker.config().concurrency);
+        futures_util::stream::iter(domain_futures).buffer_unordered(checker.config().concurrency);
 
     // Process results as they complete
     while let Some(domain_result) = stream.next().await {
@@ -450,17 +604,26 @@ async fn run_streaming_check(
             Some(false) => taken_count += 1,
             None => {
                 unknown_count += 1;
-                // Track error with proper domain context
                 if let Some(error_msg) = &domain_result.error_message {
-                    // Create a mock error for categorization (this is a bit hacky but works)
                     let mock_error = categorize_error_from_message(error_msg);
                     error_stats.add_error(&domain_result.domain, &mock_error);
                 }
             }
         }
 
+        completed += 1;
+
         // Show result immediately
-        display_single_result_with_brief_errors(&domain_result, args)?;
+        let counter = if total > 1 {
+            Some((completed, total))
+        } else {
+            None
+        };
+        if args.pretty {
+            ui::print_result(&domain_result, args.info, args.debug, counter);
+        } else {
+            ui::print_result_default(&domain_result, args.info, args.debug, counter);
+        }
         results.push(domain_result);
     }
 
@@ -468,119 +631,17 @@ async fn run_streaming_check(
 
     // Show final summary for multiple domains
     if domains.len() > 1 && !args.json && !args.csv {
-        println!(); // Empty line before summary
-
-        if args.pretty {
-            println!(
-                "✅ {} domains processed in {:.1}s: 🟢 {} available, 🔴 {} taken, ⚠️ {} unknown",
-                results.len(),
-                duration.as_secs_f64(),
-                available_count,
-                taken_count,
-                unknown_count
-            );
-        } else {
-            println!(
-                "Summary: {} available, {} taken, {} unknown (processed in {:.1}s)",
-                available_count,
-                taken_count,
-                unknown_count,
-                duration.as_secs_f64()
-            );
-        }
-
-        // Show error summary if there were errors
+        println!();
+        ui::print_summary(
+            results.len(),
+            available_count,
+            taken_count,
+            unknown_count,
+            duration,
+        );
         if error_stats.has_errors() {
             println!();
             println!("{}", error_stats.format_summary(args));
-        }
-    }
-
-    Ok(())
-}
-
-// 3. ADD NEW FUNCTION for displaying results with brief error handling
-fn display_single_result_with_brief_errors(
-    result: &domain_check_lib::DomainResult,
-    args: &Args,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Don't show any errors in JSON/CSV mode - they're in the structured data
-    if args.json || args.csv {
-        return display_single_result(result, args);
-    }
-
-    match result.available {
-        Some(true) => {
-            if args.pretty {
-                println!("🟢 {} is AVAILABLE", result.domain);
-            } else {
-                println!("{} AVAILABLE", result.domain);
-            }
-        }
-        Some(false) => {
-            if args.info {
-                if let Some(info) = result.info.as_ref() {
-                    if args.pretty {
-                        println!(
-                            "🔴 {} is TAKEN ({})",
-                            result.domain,
-                            format_domain_info(info)
-                        );
-                    } else {
-                        println!("{} TAKEN ({})", result.domain, format_domain_info(info));
-                    }
-                } else if args.pretty {
-                    println!("🔴 {} is TAKEN", result.domain);
-                } else {
-                    println!("{} TAKEN", result.domain);
-                }
-            } else if args.pretty {
-                println!("🔴 {} is TAKEN", result.domain);
-            } else {
-                println!("{} TAKEN", result.domain);
-            }
-        }
-        None => {
-            // Show brief error inline for unknown status
-            if let Some(error_msg) = &result.error_message {
-                // Try to categorize the error for brief display
-                let brief_error =
-                    if error_msg.contains("timeout") || error_msg.contains("timed out") {
-                        "(timeout)"
-                    } else if error_msg.contains("network")
-                        || error_msg.contains("dns")
-                        || error_msg.contains("connect")
-                    {
-                        "(network error)"
-                    } else if error_msg.contains("parse") || error_msg.contains("JSON") {
-                        "(parsing error)"
-                    } else if error_msg.contains("unknown") || error_msg.contains("TLD") {
-                        "(unknown TLD)"
-                    } else {
-                        "(error)"
-                    };
-
-                if args.pretty {
-                    println!("⚠️ {} {}", result.domain, brief_error);
-                } else {
-                    println!("{} {}", result.domain, brief_error);
-                }
-            } else if args.pretty {
-                println!("⚠️ {} (unknown status)", result.domain);
-            } else {
-                println!("{} (unknown status)", result.domain);
-            }
-        }
-    }
-
-    // Show timing in debug mode (existing code)
-    if args.debug {
-        if let Some(duration) = result.check_duration {
-            println!(
-                "    └─ Checked in {}ms via {}",
-                duration.as_millis(),
-                result.method_used
-            );
         }
     }
 
@@ -593,27 +654,45 @@ async fn run_batch_check(
     domains: &[String],
     args: &Args,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Show processing message for longer operations (existing code)
-    if domains.len() > 1 && (args.verbose || args.pretty) {
-        println!("🔍 Checking {} domains...", domains.len());
+    let is_structured = args.json || args.csv;
 
-        // Show TLD information for batch mode too (existing code)
-        if !args.json && !args.csv {
-            if args.all_tlds {
-                let tld_count = get_all_known_tlds().len();
-                println!("🌐 Checking against all {} known TLDs", tld_count);
-            } else if let Some(preset) = &args.preset {
-                let preset_tlds = get_preset_tlds(preset).unwrap();
+    // Show header (pretty only — default mode lets the spinner + summary speak)
+    if args.pretty && !is_structured && domains.len() > 1 {
+        ui::print_header(domains.len(), checker.config().concurrency, args);
+    } else if domains.len() > 1 && args.verbose {
+        println!("🔍 Checking {} domains...", domains.len());
+        if args.all_tlds {
+            let tld_count = get_all_known_tlds().len();
+            println!("🌐 Checking against all {} known TLDs", tld_count);
+        } else if let Some(preset) = &args.preset {
+            if let Some(preset_tlds) = get_preset_tlds(preset) {
                 println!("🎯 Using '{}' preset ({} TLDs)", preset, preset_tlds.len());
             }
         }
     }
 
+    // Start spinner for batch mode with multiple domains (all text modes).
+    // Spinner::start returns None if stderr isn't a TTY.
+    let spinner = if !is_structured && domains.len() > 1 {
+        ui::Spinner::start(format!("Checking {} domains...", domains.len()))
+    } else {
+        None
+    };
+
+    let start_time = std::time::Instant::now();
+
     // Check all domains (concurrent under the hood)
     let results = checker.check_domains(domains).await?;
 
+    let duration = start_time.elapsed();
+
+    // Stop spinner before printing results
+    if let Some(s) = spinner {
+        s.stop().await;
+    }
+
     // Display results based on format
-    display_results(&results, args)?;
+    display_results(&results, args, duration)?;
 
     Ok(())
 }
@@ -812,9 +891,15 @@ fn apply_cli_args_to_config(
         // 20 is the clap default
         config.concurrency = args.concurrency;
     }
-    // Otherwise keep the value from environment/config file
-    config.enable_whois_fallback = !args.no_whois;
-    config.detailed_info = args.info;
+
+    // Only override boolean settings when the user explicitly passes the flag.
+    // Without this guard, the default (false) would always overwrite config/env values.
+    if args.no_whois {
+        config.enable_whois_fallback = false;
+    }
+    if args.info {
+        config.detailed_info = true;
+    }
 
     // Handle TLD precedence: CLI explicit > CLI preset > CLI all > env vars > config file
     if args.tlds.is_some() {
@@ -828,7 +913,7 @@ fn apply_cli_args_to_config(
     // Otherwise keep TLDs from environment or config file (already applied)
 
     // Bootstrap logic with environment consideration
-    config.enable_bootstrap = should_enable_bootstrap(args, &config.tlds) || args.bootstrap;
+    config.enable_bootstrap = should_enable_bootstrap(args, &config.tlds);
 
     Ok(config)
 }
@@ -859,41 +944,132 @@ async fn get_domains_to_check(
     args: &Args,
     config: &CheckConfig,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let mut domains = Vec::new();
+    let mut base_names = Vec::new();
 
-    // Add domains from command line
-    domains.extend(args.domains.clone());
+    // Step 1: Collect raw inputs from args and file
+    base_names.extend(args.domains.clone());
 
-    // Add domains from file (CLI --file or DC_FILE env var)
     if let Some(cli_file) = &args.file {
-        // CLI --file flag provided
         if args.verbose {
             println!("🔧 Reading domains from file (CLI --file): {}", cli_file);
         }
-
         let file_domains = read_domains_from_file(cli_file).await?;
-        domains.extend(file_domains);
+        base_names.extend(file_domains);
     } else if let Ok(env_file_path) = std::env::var("DC_FILE") {
-        // DC_FILE environment variable provided
         if args.verbose {
             println!(
                 "🔧 Reading domains from file (DC_FILE env var): {}",
                 env_file_path
             );
         }
-
         let file_domains = read_domains_from_file(&env_file_path).await?;
-        domains.extend(file_domains);
+        base_names.extend(file_domains);
     }
 
-    // Use the passed config for TLD expansion (includes env vars and config file TLDs)
-    let expanded_domains = domain_check_lib::expand_domain_inputs(&domains, &config.tlds);
+    // Step 2: Expand patterns into base names
+    if let Some(patterns) = &args.patterns {
+        for pattern in patterns {
+            if args.verbose {
+                let estimate = domain_check_lib::estimate_pattern_count(pattern)?;
+                eprintln!("🔧 Pattern '{}' → ~{} names", pattern, estimate);
+            }
+            let expanded = domain_check_lib::expand_pattern(pattern)?;
+            base_names.extend(expanded);
+        }
+    }
+
+    // Step 3: Apply prefix/suffix permutations
+    // CLI flags take priority; fall back to config file / env vars
+    let config_prefixes = get_generation_prefixes(args);
+    let config_suffixes = get_generation_suffixes(args);
+
+    if config_prefixes.is_some() || config_suffixes.is_some() {
+        let empty: Vec<String> = Vec::new();
+        let prefixes = config_prefixes.as_deref().unwrap_or(&empty);
+        let suffixes = config_suffixes.as_deref().unwrap_or(&empty);
+
+        if args.verbose {
+            if !prefixes.is_empty() {
+                eprintln!("🔧 Prefixes: {}", prefixes.join(", "));
+            }
+            if !suffixes.is_empty() {
+                eprintln!("🔧 Suffixes: {}", suffixes.join(", "));
+            }
+        }
+
+        base_names =
+            domain_check_lib::apply_affixes(&base_names, prefixes, suffixes, true).collect();
+    }
+
+    // Step 4: TLD expansion (existing, untouched)
+    let expanded_domains = domain_check_lib::expand_domain_inputs(&base_names, &config.tlds);
 
     if expanded_domains.is_empty() {
         return Err("No valid domains found to check".into());
     }
 
     Ok(expanded_domains)
+}
+
+/// Load the generation config from config file, respecting --config flag
+fn load_generation_config(args: &Args) -> Option<domain_check_lib::GenerationConfig> {
+    let config_manager = ConfigManager::new(false);
+
+    let file_config = if let Some(explicit_path) = &args.config {
+        config_manager.load_file(explicit_path).ok()
+    } else if let Ok(env_path) = std::env::var("DC_CONFIG") {
+        config_manager.load_file(&env_path).ok()
+    } else {
+        config_manager.discover_and_load().ok()
+    };
+
+    file_config.and_then(|fc| fc.generation)
+}
+
+/// Get effective prefixes: CLI > env var (DC_PREFIX) > config file
+fn get_generation_prefixes(args: &Args) -> Option<Vec<String>> {
+    // CLI flags take highest priority
+    if args.prefixes.is_some() {
+        return args.prefixes.clone();
+    }
+
+    // Fall back to env var
+    let env_config = load_env_config(false);
+    if env_config.prefixes.is_some() {
+        return env_config.prefixes;
+    }
+
+    // Fall back to config file
+    if let Some(gen) = load_generation_config(args) {
+        if gen.prefixes.is_some() {
+            return gen.prefixes;
+        }
+    }
+
+    None
+}
+
+/// Get effective suffixes: CLI > env var (DC_SUFFIX) > config file
+fn get_generation_suffixes(args: &Args) -> Option<Vec<String>> {
+    // CLI flags take highest priority
+    if args.suffixes.is_some() {
+        return args.suffixes.clone();
+    }
+
+    // Fall back to env var
+    let env_config = load_env_config(false);
+    if env_config.suffixes.is_some() {
+        return env_config.suffixes;
+    }
+
+    // Fall back to config file
+    if let Some(gen) = load_generation_config(args) {
+        if gen.suffixes.is_some() {
+            return gen.suffixes;
+        }
+    }
+
+    None
 }
 
 /// Read domains from a file
@@ -974,82 +1150,17 @@ async fn read_domains_from_file(
     Ok(domains)
 }
 
-/// Display a single domain result (for streaming mode)
-fn display_single_result(
-    result: &domain_check_lib::DomainResult,
-    args: &Args,
-) -> Result<(), Box<dyn std::error::Error>> {
-    match result.available {
-        Some(true) => {
-            if args.pretty {
-                println!("🟢 {} is AVAILABLE", result.domain);
-            } else {
-                println!("{} AVAILABLE", result.domain);
-            }
-        }
-        Some(false) => {
-            if args.info {
-                if let Some(info) = result.info.as_ref() {
-                    if args.pretty {
-                        println!(
-                            "🔴 {} is TAKEN ({})",
-                            result.domain,
-                            format_domain_info(info)
-                        );
-                    } else {
-                        println!("{} TAKEN ({})", result.domain, format_domain_info(info));
-                    }
-                } else if args.pretty {
-                    println!("🔴 {} is TAKEN", result.domain);
-                } else {
-                    println!("{} TAKEN", result.domain);
-                }
-            } else if args.pretty {
-                println!("🔴 {} is TAKEN", result.domain);
-            } else {
-                println!("{} TAKEN", result.domain);
-            }
-        }
-        None => {
-            // Handle unknown status with error message
-            if let Some(error_msg) = &result.error_message {
-                if args.pretty {
-                    println!("⚠️ {} status UNKNOWN ({})", result.domain, error_msg);
-                } else {
-                    println!("{} UNKNOWN ({})", result.domain, error_msg);
-                }
-            } else if args.pretty {
-                println!("⚠️ {} status UNKNOWN", result.domain);
-            } else {
-                println!("{} UNKNOWN", result.domain);
-            }
-        }
-    }
-
-    // Show timing in debug mode
-    if args.debug {
-        if let Some(duration) = result.check_duration {
-            println!(
-                "    └─ Checked in {}ms via {}",
-                duration.as_millis(),
-                result.method_used
-            );
-        }
-    }
-
-    Ok(())
-}
-
 fn display_results(
     results: &[domain_check_lib::DomainResult],
     args: &Args,
+    duration: std::time::Duration,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if args.json {
         display_json_results(results)?;
     } else if args.csv {
         display_csv_results(results)?;
     } else {
-        display_text_results(results, args)?;
+        display_text_results(results, args, duration)?;
     }
 
     Ok(())
@@ -1108,99 +1219,31 @@ fn display_csv_results(
 fn display_text_results(
     results: &[domain_check_lib::DomainResult],
     args: &Args,
+    duration: std::time::Duration,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut available_count = 0;
-    let mut taken_count = 0;
-    let mut unknown_count = 0;
-
-    for result in results {
-        match result.available {
-            Some(true) => {
-                available_count += 1;
-                if args.pretty {
-                    println!("🟢 {} is AVAILABLE", result.domain);
-                } else {
-                    println!("{} AVAILABLE", result.domain);
-                }
-            }
-            Some(false) => {
-                taken_count += 1;
-                if args.info {
-                    if let Some(info) = result.info.as_ref() {
-                        if args.pretty {
-                            println!(
-                                "🔴 {} is TAKEN ({})",
-                                result.domain,
-                                format_domain_info(info)
-                            );
-                        } else {
-                            println!("{} TAKEN ({})", result.domain, format_domain_info(info));
-                        }
-                    } else if args.pretty {
-                        println!("🔴 {} is TAKEN", result.domain);
-                    } else {
-                        println!("{} TAKEN", result.domain);
-                    }
-                } else if args.pretty {
-                    println!("🔴 {} is TAKEN", result.domain);
-                } else {
-                    println!("{} TAKEN", result.domain);
-                }
-            }
-            None => {
-                unknown_count += 1;
-                if args.pretty {
-                    println!("⚠️ {} status UNKNOWN", result.domain);
-                } else {
-                    println!("{} UNKNOWN", result.domain);
-                }
-            }
+    if args.pretty {
+        // Pretty mode: grouped layout with section headers
+        ui::print_grouped_results(results, args.info, args.debug);
+    } else {
+        // Default mode: colored flat list
+        for result in results {
+            ui::print_result_default(result, args.info, args.debug, None);
         }
     }
 
-    // Show summary for multiple domains
+    // Shared summary for both modes
     if results.len() > 1 {
+        let available = results.iter().filter(|r| r.available == Some(true)).count();
+        let taken = results
+            .iter()
+            .filter(|r| r.available == Some(false))
+            .count();
+        let unknown = results.iter().filter(|r| r.available.is_none()).count();
         println!();
-        if args.pretty {
-            println!(
-                "✅ {} domains processed: 🟢 {} available, 🔴 {} taken, ⚠️ {} unknown",
-                results.len(),
-                available_count,
-                taken_count,
-                unknown_count
-            );
-        } else {
-            println!(
-                "Summary: {} available, {} taken, {} unknown",
-                available_count, taken_count, unknown_count
-            );
-        }
+        ui::print_summary(results.len(), available, taken, unknown, duration);
     }
 
     Ok(())
-}
-
-/// Format domain info for display
-fn format_domain_info(info: &domain_check_lib::DomainInfo) -> String {
-    let mut parts = Vec::new();
-
-    if let Some(registrar) = &info.registrar {
-        parts.push(format!("Registrar: {}", registrar));
-    }
-
-    if let Some(created) = &info.creation_date {
-        parts.push(format!("Created: {}", created));
-    }
-
-    if let Some(expires) = &info.expiration_date {
-        parts.push(format!("Expires: {}", expires));
-    }
-
-    if parts.is_empty() {
-        "No info available".to_string()
-    } else {
-        parts.join(", ")
-    }
 }
 
 // domain-check/src/main.rs tests module
@@ -1219,8 +1262,8 @@ mod tests {
             concurrency: 20,
             force: false,
             info: false,
-            bootstrap: false,
             no_whois: false,
+            no_bootstrap: false,
             json: false,
             csv: false,
             pretty: false,
@@ -1230,118 +1273,31 @@ mod tests {
             verbose: false,
             all_tlds: false,
             preset: None,
+            list_presets: false,
+            patterns: None,
+            prefixes: None,
+            suffixes: None,
+            dry_run: false,
+            yes: false,
+            help: false,
         }
     }
 
     #[test]
-    fn test_should_enable_bootstrap_large_tld_set() {
-        // Test auto-bootstrap with large TLD sets
+    fn test_should_enable_bootstrap_default() {
+        // Bootstrap is now enabled by default
         let args = create_test_args();
-        let large_tld_set = Some((0..25).map(|i| format!("tld{}", i)).collect());
-
-        assert!(should_enable_bootstrap(&args, &large_tld_set));
+        let tlds = Some(vec!["com".to_string(), "org".to_string()]);
+        assert!(should_enable_bootstrap(&args, &tlds));
     }
 
     #[test]
-    fn test_should_enable_bootstrap_small_set() {
-        // Test no auto-bootstrap with small TLD sets
-        let args = create_test_args();
-        let small_tld_set = Some(vec!["com".to_string(), "org".to_string()]);
-
-        assert!(!should_enable_bootstrap(&args, &small_tld_set));
-    }
-
-    #[test]
-    fn test_categorize_error_from_message() {
-        // Test timeout error categorization
-        let timeout_error = categorize_error_from_message("Operation timed out after 3s");
-        assert!(matches!(
-            timeout_error,
-            domain_check_lib::DomainCheckError::Timeout { .. }
-        ));
-
-        // Test network error categorization
-        let network_error = categorize_error_from_message("dns error: failed to lookup");
-        assert!(matches!(
-            network_error,
-            domain_check_lib::DomainCheckError::NetworkError { .. }
-        ));
-
-        // Test parsing error categorization
-        let parse_error = categorize_error_from_message("Failed to parse JSON response");
-        assert!(matches!(
-            parse_error,
-            domain_check_lib::DomainCheckError::ParseError { .. }
-        ));
-
-        // Test bootstrap error categorization
-        let bootstrap_error = categorize_error_from_message("Unknown TLD not supported");
-        assert!(matches!(
-            bootstrap_error,
-            domain_check_lib::DomainCheckError::BootstrapError { .. }
-        ));
-    }
-
-    #[test]
-    fn test_error_stats_aggregation() {
-        let mut stats = ErrorStats::default();
-
-        // Add different types of errors
-        let timeout_error =
-            domain_check_lib::DomainCheckError::timeout("test", std::time::Duration::from_secs(3));
-        let network_error = domain_check_lib::DomainCheckError::network("network failure");
-
-        stats.add_error("example.com", &timeout_error);
-        stats.add_error("test.org", &network_error);
-        stats.add_error("another.com", &timeout_error);
-
-        // Verify aggregation
-        assert_eq!(stats.timeouts.len(), 2);
-        assert_eq!(stats.network_errors.len(), 1);
-        assert!(stats.has_errors());
-
-        // Verify domains are stored correctly
-        assert!(stats.timeouts.contains(&"example.com".to_string()));
-        assert!(stats.timeouts.contains(&"another.com".to_string()));
-        assert!(stats.network_errors.contains(&"test.org".to_string()));
-    }
-
-    #[test]
-    fn test_error_stats_format_summary() {
-        let mut stats = ErrorStats::default();
-        let args = create_test_args();
-
-        // Test empty stats
-        assert_eq!(stats.format_summary(&args), "");
-
-        // Add some errors
-        let timeout_error =
-            domain_check_lib::DomainCheckError::timeout("test", std::time::Duration::from_secs(3));
-        stats.add_error("example.com", &timeout_error);
-        stats.add_error("test.org", &timeout_error);
-
-        let summary = stats.format_summary(&args);
-        assert!(summary.contains("⚠️  Some domains could not be checked:"));
-        assert!(summary.contains("2 timeouts:"));
-        assert!(summary.contains("example.com"));
-        assert!(summary.contains("test.org"));
-    }
-
-    #[test]
-    fn test_error_stats_truncation() {
-        let mut stats = ErrorStats::default();
-        let args = create_test_args();
-
-        // Add more than 5 errors to test truncation
-        let timeout_error =
-            domain_check_lib::DomainCheckError::timeout("test", std::time::Duration::from_secs(3));
-        for i in 0..8 {
-            stats.add_error(&format!("domain{}.com", i), &timeout_error);
-        }
-
-        let summary = stats.format_summary(&args);
-        assert!(summary.contains("8 timeouts:"));
-        assert!(summary.contains("... and 3 more")); // Should truncate after 5
+    fn test_should_disable_bootstrap_with_flag() {
+        // --no-bootstrap disables it
+        let mut args = create_test_args();
+        args.no_bootstrap = true;
+        let tlds = Some(vec!["com".to_string(), "org".to_string()]);
+        assert!(!should_enable_bootstrap(&args, &tlds));
     }
 
     // validation tests to include required domains
@@ -1403,5 +1359,168 @@ mod tests {
 
         let result = validate_args(&args);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_args_streaming_with_json_rejected() {
+        let mut args = create_test_args();
+        args.domains = vec!["test".to_string()];
+        args.streaming = true;
+        args.json = true;
+
+        let result = validate_args(&args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--streaming"));
+    }
+
+    #[test]
+    fn test_validate_args_streaming_with_csv_rejected() {
+        let mut args = create_test_args();
+        args.domains = vec!["test".to_string()];
+        args.streaming = true;
+        args.csv = true;
+
+        let result = validate_args(&args);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--streaming"));
+    }
+
+    #[test]
+    fn test_validate_args_batch_with_json_allowed() {
+        let mut args = create_test_args();
+        args.domains = vec!["test".to_string()];
+        args.batch = true;
+        args.json = true;
+
+        let result = validate_args(&args);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_no_whois_flag_only_disables() {
+        // When --no-whois is NOT passed, config/env values should be preserved
+        let args = create_test_args(); // no_whois defaults to false
+        let config = CheckConfig {
+            enable_whois_fallback: false, // Simulates config setting
+            ..CheckConfig::default()
+        };
+
+        let result = apply_cli_args_to_config(config, &args).unwrap();
+        assert!(
+            !result.enable_whois_fallback,
+            "Config whois_fallback=false should be preserved when --no-whois is not passed"
+        );
+    }
+
+    #[test]
+    fn test_no_whois_flag_overrides_config() {
+        // When --no-whois IS passed, it should disable whois regardless of config
+        let mut args = create_test_args();
+        args.no_whois = true;
+        let config = CheckConfig {
+            enable_whois_fallback: true,
+            ..CheckConfig::default()
+        };
+
+        let result = apply_cli_args_to_config(config, &args).unwrap();
+        assert!(
+            !result.enable_whois_fallback,
+            "--no-whois should disable whois fallback"
+        );
+    }
+
+    #[test]
+    fn test_info_flag_only_enables() {
+        // When --info is NOT passed, config/env values should be preserved
+        let args = create_test_args(); // info defaults to false
+        let config = CheckConfig {
+            detailed_info: true, // Simulates config setting
+            ..CheckConfig::default()
+        };
+
+        let result = apply_cli_args_to_config(config, &args).unwrap();
+        assert!(
+            result.detailed_info,
+            "Config detailed_info=true should be preserved when --info is not passed"
+        );
+    }
+
+    #[test]
+    fn test_info_flag_overrides_config() {
+        // When --info IS passed, it should enable info regardless of config
+        let mut args = create_test_args();
+        args.info = true;
+        let config = CheckConfig {
+            detailed_info: false,
+            ..CheckConfig::default()
+        };
+
+        let result = apply_cli_args_to_config(config, &args).unwrap();
+        assert!(result.detailed_info, "--info should enable detailed info");
+    }
+
+    #[test]
+    fn test_categorize_error_from_message() {
+        let timeout_error = categorize_error_from_message("Operation timed out after 3s");
+        assert!(matches!(
+            timeout_error,
+            domain_check_lib::DomainCheckError::Timeout { .. }
+        ));
+
+        let network_error = categorize_error_from_message("dns error: failed to lookup");
+        assert!(matches!(
+            network_error,
+            domain_check_lib::DomainCheckError::NetworkError { .. }
+        ));
+
+        let parse_error = categorize_error_from_message("Failed to parse JSON response");
+        assert!(matches!(
+            parse_error,
+            domain_check_lib::DomainCheckError::ParseError { .. }
+        ));
+
+        let bootstrap_error = categorize_error_from_message("Unknown TLD not supported");
+        assert!(matches!(
+            bootstrap_error,
+            domain_check_lib::DomainCheckError::BootstrapError { .. }
+        ));
+    }
+
+    #[test]
+    fn test_error_stats_aggregation() {
+        let mut stats = ErrorStats::default();
+        let timeout_error =
+            domain_check_lib::DomainCheckError::timeout("test", std::time::Duration::from_secs(3));
+        let network_error = domain_check_lib::DomainCheckError::network("network failure");
+
+        stats.add_error("example.com", &timeout_error);
+        stats.add_error("test.org", &network_error);
+        stats.add_error("another.com", &timeout_error);
+
+        assert_eq!(stats.timeouts.len(), 2);
+        assert_eq!(stats.network_errors.len(), 1);
+        assert!(stats.has_errors());
+        assert!(stats.timeouts.contains(&"example.com".to_string()));
+        assert!(stats.timeouts.contains(&"another.com".to_string()));
+        assert!(stats.network_errors.contains(&"test.org".to_string()));
+    }
+
+    #[test]
+    fn test_error_stats_format_summary() {
+        let mut stats = ErrorStats::default();
+        let args = create_test_args();
+
+        assert_eq!(stats.format_summary(&args), "");
+
+        let timeout_error =
+            domain_check_lib::DomainCheckError::timeout("test", std::time::Duration::from_secs(3));
+        stats.add_error("example.com", &timeout_error);
+        stats.add_error("test.org", &timeout_error);
+
+        let summary = stats.format_summary(&args);
+        assert!(summary.contains("⚠️  Some domains could not be checked:"));
+        assert!(summary.contains("2 timeouts:"));
+        assert!(summary.contains("example.com"));
+        assert!(summary.contains("test.org"));
     }
 }

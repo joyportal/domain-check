@@ -1,6 +1,347 @@
 # Changelog
 
-## [0.6.0] - 2025-01-XX
+## [1.0.1] - 2026-03-01
+
+### Fixed
+- Fixed broken documentation links on crates.io — relative paths resolved incorrectly when the root README was rendered under the CLI crate's directory; all links now use absolute GitHub URLs
+- Added library docs link to the Project Docs section in root README
+
+### Added
+- MCPB bundles (`.mcpb`) attached to GitHub releases for each platform (Linux x86_64, Linux musl, macOS x86_64, macOS aarch64, Windows x86_64) — enables listing on the official MCP Registry
+- Automated MCP Registry publishing via `mcp-publisher` with GitHub OIDC authentication in the release pipeline
+- Updated `server.json` from `registryType: "cargo"` (unsupported) to `registryType: "mcpb"` with per-platform entries and SHA-256 verification
+
+## [1.0.0] - 2026-03-01
+
+### MCP Server, Custom Help Screen & Binary Size Optimization
+
+This release adds a new MCP (Model Context Protocol) server crate, making domain-check available as native tools for AI coding agents. It also overhauls the CLI help experience and dramatically reduces the release binary size.
+
+### Added
+
+#### **MCP Server (`domain-check-mcp`) — New Crate**
+- New workspace member: `domain-check-mcp` — an MCP server exposing domain checking as structured tools for AI agents
+- 6 tools: `check_domain`, `check_domains`, `check_with_preset`, `generate_names`, `list_presets`, `domain_info`
+- Stdio transport (JSON-RPC 2.0) — works with any MCP-compatible client
+- Built on [rmcp](https://crates.io/crates/rmcp) (official Rust MCP SDK)
+- All tools are read-only with structured JSON responses; errors returned as tool content for agent consumption
+- Safety limits: batch max 500 domains, pattern generation max 100,000 names
+- Compatible with: Claude Code, Claude Desktop, VS Code Copilot, Cursor, Windsurf, JetBrains, OpenAI Codex CLI, Gemini CLI
+- `server.json` for official MCP registry submission
+- `smithery.yaml` for Smithery registry
+- 39 tests (31 unit + 8 integration via duplex transport)
+
+#### Binary Size Report (macOS arm64)
+| Build | Size | Notes |
+|-------|------|-------|
+| v0.9.1 (`main`) | 5.88 MB | Before optimizations |
+| This release (CLI) | 2.71 MB | After LTO, strip, dependency cleanup |
+| This release (MCP) | 4.2 MB | New MCP server binary |
+| **CLI Reduction** | **54% smaller** | **3.17 MB saved** |
+
+### Changed
+
+#### **Dual License: MIT OR Apache-2.0**
+- Changed license from Apache-2.0 only to dual MIT OR Apache-2.0
+- Users may choose either license at their option
+- Aligns with Rust ecosystem convention (used by the Rust compiler, serde, tokio, clap, etc.)
+- Added `LICENSE-MIT`; renamed `LICENSE` → `LICENSE-APACHE`
+
+#### **Custom `--help` Screen**
+- Replaced clap's default help renderer with a fully custom help screen
+- ASCII art banner (figlet `standard` font) in cyan bold
+- Compact one-liner flag table organized into 7 sections: Domain Selection, Domain Generation, Output Format, Performance, Protocol, Configuration, General
+- Usage patterns with colored `domain-check` command name
+- Example commands section with green syntax highlighting
+- Modern color palette: cyan flags, magenta section headers, dim descriptions
+- `--version` still handled natively by clap
+
+#### **Binary Size: 5.9 MB → 2.7 MB (54% reduction)**
+- Added release profile: LTO, single codegen unit, symbol stripping, abort-on-panic
+- Removed unused `regex` dependency (eliminated 4 crates: regex, regex-automata, regex-syntax, aho-corasick)
+- Narrowed tokio features from `"full"` to only what's used (rt, rt-multi-thread, time, sync, macros, process, io-util)
+- Replaced `futures` meta-crate with `futures-util` (only StreamExt and stream::iter were used)
+- Removed unused `toml` dependency from CLI crate (config parsing is in the library)
+- Replaced `lazy_static` with `std::sync::OnceLock` (stable since Rust 1.70, our MSRV)
+
+#### **CI/CD Pipeline**
+- CI workflow now tests `domain-check-mcp` alongside library and CLI
+- Release pipeline builds MCP server binaries for all 5 platforms (Linux x86_64, Linux musl, macOS x86_64, macOS aarch64, Windows)
+- Release publishes `domain-check-mcp` to crates.io (lib → CLI → MCP publish order)
+- GitHub release notes include MCP server installation instructions
+
+### Removed
+- `domain-check/src/main.rs.old` — 52 KB of dead legacy code
+- `regex` dependency from both crates (only a dead `From<regex::Error>` impl existed)
+- `lazy_static` dependency (replaced with stdlib)
+- `futures` meta-crate (replaced with `futures-util`)
+- Clap styling imports and custom `STYLES` constant (superseded by custom help)
+
+### Fixed
+- `--pattern` help text now correctly documents all 3 wildcards: `\w=letter`, `\d=digit`, `?=either` (was missing `?=either`)
+
+---
+
+## [0.9.1] - 2026-02-17
+
+### Documentation Overhaul
+
+This patch release focuses on documentation quality, structure, and discoverability to better reflect domain-check as a mature CLI + library project.
+
+### Added
+- New `CONTRIBUTING.md` with setup, workflow, and contribution standards
+- New `SECURITY.md` with reporting policy and supported-version guidance
+- New `docs/README.md` documentation index
+- New `docs/FAQ.md` for troubleshooting and common usage questions
+- New `docs/AUTOMATION.md` for CI/CD and machine-readable workflows
+
+### Changed
+- Reworked `README.md` into a cleaner landing page with stronger product framing
+- Improved cross-linking between README, CLI reference, examples, FAQ, and automation docs
+- Updated key docs wording from `1,300+` to `1,200+` TLD coverage for consistency
+- Normalized examples and formatting across docs to match current CLI output style
+
+## [0.9.0] - 2026-02-14
+
+### Universal TLD Coverage & CLI Help UX Overhaul
+
+This release transforms domain-check from supporting 32 hardcoded TLDs to covering 1,200+ TLDs across the entire internet — with zero manual maintenance. RDAP endpoints are discovered automatically via the IANA bootstrap registry, and TLDs without RDAP are handled through intelligent WHOIS server discovery. The CLI help output is now colored and grouped by category for easy scanning.
+
+### Added
+
+#### **IANA Bootstrap (Enabled by Default)**
+- Bulk fetch of the IANA RDAP bootstrap registry (`dns.json`) on first use — loads ~1,180 TLD-to-endpoint mappings in a single request
+- 24-hour cache with automatic refresh (up from 1-hour per-TLD caching)
+- Negative cache for TLDs known to have no RDAP endpoint, avoiding repeated lookups
+- `initialize_bootstrap()` public API for pre-warming the cache in library usage
+- Graceful degradation: if the IANA fetch fails, falls back to 32 hardcoded TLDs
+
+#### **WHOIS Server Discovery**
+- Automatic discovery of authoritative WHOIS servers via IANA referral (`whois.iana.org`)
+- Targeted WHOIS queries using `whois -h <server> <domain>` for more accurate results
+- WHOIS server cache to avoid repeated IANA lookups for the same TLD
+- Covers ~189 TLDs that lack RDAP endpoints (especially ccTLDs like .es, .co, .eu, .jp)
+
+#### **8 New TLD Presets (11 Total)**
+- `popular` — all-rounder preset: com, net, org, io, ai, app, dev, tech, me, co, xyz
+- `classic` — legacy gTLDs: com, net, org, info, biz
+- `tech` — developer tools and infrastructure: io, ai, app, dev, tech, cloud, software, digital, codes, systems, network, solutions
+- `creative` — artists, designers, and media: design, art, studio, media, photography, film, music, gallery, graphics, ink
+- `ecommerce` (alias: `shopping`) — online stores and retail: shop, store, market, sale, deals, shopping, buy, bargains
+- `finance` — financial services and fintech: finance, capital, fund, money, investments, insurance, tax, exchange, trading
+- `web` — web services and platforms: web, site, website, online, blog, page, wiki, host, email
+- `trendy` — fast-growing new gTLDs: xyz, online, site, top, icu, fun, space, click, website, life, world, live, today
+- Previously limited to 3 presets (startup, enterprise, country) because only 32 hardcoded TLDs were available — bootstrap removes this constraint
+
+#### **CLI: `--list-presets` Flag**
+- New `--list-presets` flag prints all 11 built-in presets with TLD counts and names, then exits
+- Works without any domain arguments — useful for quick discovery of available presets
+
+#### **CLI: Colored, Grouped `--help` Output**
+- `--help` now uses colored output: yellow headers, green flags, cyan placeholders
+- All flags organized into 6 logical groups: Domain Selection, Domain Generation, Output Format, Performance, Protocol, Configuration
+- Much easier to scan than the previous flat wall of 25+ flags
+
+#### **CLI: `--no-bootstrap` Flag**
+- New `--no-bootstrap` flag to disable bootstrap and restrict to 32 hardcoded TLDs
+- Useful for offline environments, CI with network restrictions, or faster deterministic checks
+
+#### **`--all` with Bootstrap Pre-warming**
+- `--all` now pre-warms the bootstrap cache before checking, giving access to 1,200+ TLDs
+- Previously `--all` was limited to 32 hardcoded TLDs
+
+#### **Library API**
+- `initialize_bootstrap()` — pre-warm the IANA bootstrap cache
+- `get_whois_server(tld)` — discover and cache the authoritative WHOIS server for any TLD
+
+### Changed
+- Bootstrap is now enabled by default in `CheckConfig` (previously `false`)
+- `get_all_known_tlds()` returns the union of hardcoded + bootstrapped TLDs (deduplicated, sorted)
+- WHOIS fallback now discovers the authoritative server before querying, improving accuracy for ccTLDs
+- `--all` mode checks 1,200+ TLDs (up from 32) when bootstrap is enabled
+- `--preset` help text now says "use --list-presets to see all" instead of listing 3 stale presets inline
+
+### Removed
+- **`-b`/`--bootstrap` CLI flag** — was a no-op since bootstrap became the default. Use `--no-bootstrap` to disable.
+
+### Fixed
+- **Batch `check_domains` bug**: all error results were mapped to `domains[0]` instead of their actual domain name — errors now correctly report the domain that failed
+
+### Testing
+- 19 new tests covering bootstrap cache, WHOIS discovery, IANA response parsing, and CLI flags
+- 6 network-dependent integration tests (`#[ignore]`): bulk bootstrap fetch, WHOIS discovery, end-to-end non-hardcoded TLD checks
+- 2 new CLI integration tests for `--list-presets` output and grouped help headings
+- All existing tests pass unchanged — zero regressions
+
+### Impact
+- **1,180+ TLDs** via RDAP (IANA bootstrap)
+- **~189 TLDs** via WHOIS fallback (IANA server discovery)
+- **~1,200+ total** — near-universal coverage
+- **32 TLDs** always work offline (hardcoded fallback)
+- **Zero manual maintenance** — IANA is the source of truth
+
+---
+
+## [0.8.0] - 2026-02-14
+
+### Domain Name Generation Engine (Issue #13)
+
+This release adds pattern-based domain generation, prefix/suffix permutations, and a dry-run preview mode — transforming domain-check's input layer from "check these specific domains" into a self-contained domain lookup primitive. Generation is fast (pure string math), composable with all existing flags, and designed to be agent-friendly.
+
+### Added
+
+#### **Pattern Expansion (`--pattern`)**
+- Wildcard patterns generate base names: `\d` (0-9), `\w` (a-z + hyphen), `?` (alphanumeric + hyphen)
+- Literal characters pass through unchanged
+- Odometer-style expansion: O(1) memory per name, handles large patterns efficiently
+- Invalid patterns produce clear error messages with syntax hints
+
+#### **Prefix/Suffix Permutations (`--prefix`, `--suffix`)**
+- Comma-separated prefixes/suffixes generate all name combinations
+- Bare name included by default (e.g., `app --prefix get` → `getapp`, `app`)
+- Works with patterns, file inputs, and direct domain arguments
+- Invalid combinations (too short, leading/trailing hyphen) automatically filtered
+
+#### **Dry Run (`--dry-run`)**
+- Preview all generated FQDNs without making network requests
+- Supports `--json` for structured output (pipe to `jq`, etc.)
+- Prints domain count to stderr: `"N domains would be checked"`
+
+#### **Interactive Confirmation**
+- Runs of >500 domains prompt for confirmation in interactive terminals
+- `--yes` / `--force` skip the prompt for automation and agents
+- Non-TTY (piped) environments never prompt — agents and scripts are never blocked
+
+#### **Config & Environment Variable Defaults**
+- `[generation]` section in config files: set default `prefixes` and `suffixes`
+- `DC_PREFIX` and `DC_SUFFIX` environment variables for per-session defaults
+- Standard precedence: CLI flags > env vars > config file
+- `--pattern` intentionally excluded from config/env (exploratory, per-invocation input)
+
+#### **Library API (`domain-check-lib`)**
+- New `generate` module with public API: `expand_pattern()`, `apply_affixes()`, `generate_names()`, `estimate_pattern_count()`
+- `GenerateConfig` and `GenerationResult` types for structured generation
+- `GenerationConfig` added to `FileConfig` for config file parsing
+- `InvalidPattern` error variant with user-friendly messages
+
+### Changed
+- `validate_args()` now accepts `--pattern` as an alternative to positional domains
+- `get_domains_to_check()` pipeline: collect → patterns → affixes → TLD expansion
+- `--force` now has real purpose: skips interactive confirmation (same as `--yes`)
+- `EnvConfig` extended with `prefixes` and `suffixes` fields
+
+### Documentation
+- Added "Domain Generation" section to CLI.md with pattern syntax, examples, and config reference
+- Added generation examples to EXAMPLES.md (pattern discovery, AI agent integration, team workflows)
+- Updated README.md: new Key Features, Quick Start examples, Command Reference, and config examples
+- Added `DC_PREFIX` and `DC_SUFFIX` to environment variable reference tables
+
+### Testing
+- 42 new unit tests for generation engine (patterns, affixes, estimates, pipeline, edge cases)
+- 9 new error.rs tests (error classification, retryability, availability indicators)
+- 2 new config tests (generation config loading, merge precedence)
+- 26 new CLI integration tests (dry-run, patterns, prefixes, suffixes, config precedence, env vars, backward compat)
+- All existing tests unchanged — zero regressions
+- Total test count: 97 → 177
+
+### Impact
+- Zero new dependencies — pure string manipulation
+- Generation is orthogonal to all existing flags (`--preset`, `--all`, `-t`, `--json`, etc.)
+- Existing commands work unchanged — generation only activates when `--pattern`, `--prefix`, or `--suffix` are used
+- Non-TTY environments (piped, agents, CI) are never blocked by confirmation prompts
+
+---
+
+## [0.7.0] - 2026-02-13
+
+### 🎨 Revamped CLI Output (Issue #17)
+
+This release transforms domain-check's terminal experience. Default output now includes colored status words, a loading spinner, progress counters, and a summary bar. Pretty mode (`--pretty`) adds grouped results by status with styled section headers.
+
+### 🎉 Added
+
+#### **New `ui` module (`domain-check/src/ui.rs`)**
+- Extracted all display logic into a dedicated module for cleaner separation from CLI orchestration
+- `Spinner` — async braille-dot spinner on stderr for batch operations, with TTY detection (skipped when piped) and 500ms startup delay to avoid flash on fast checks
+- `print_header` — styled header showing version, domain count, preset, and concurrency
+- `print_result` / `print_result_default` — colored result lines for pretty and default modes
+- `print_grouped_results` — groups batch results into Available/Taken/Unknown sections (the core of Issue #17)
+- `print_summary` — colored summary bar: `8 domains in 0.8s | 3 available | 5 taken | 0 unknown`
+- `print_error_summary` — categorized error report (timeouts, network, parsing, unknown TLD)
+
+#### **Default mode improvements (no flags needed)**
+- Status words are now colored: green `AVAILABLE`, red `TAKEN`, yellow `UNKNOWN`
+- Progress counter `[3/8]` shown during streaming multi-domain checks
+- Loading spinner displayed during batch operations (stderr, TTY-only)
+- Colored summary bar shown after multi-domain checks
+
+#### **Pretty mode (`--pretty`) improvements**
+- Results grouped by status with section headers: `── Available (3) ──────`
+- Styled header with version, domain count, preset info, and concurrency
+- Column-aligned domain names with `console::pad_str()`
+- Empty sections (e.g. no unknowns) are omitted entirely
+
+#### **Demo recording pipeline**
+- Added `scripts/record-demo.sh` — reproducible demo recording using asciinema (v2 format) + svg-term-cli
+- Scripted scenario with realistic typing speed, blue comment annotations, and cyan prompt
+- Supports `main` (scripted), `live` (interactive), and `rerender` (re-convert existing cast) modes
+- New `assets/demo.svg` replacing the old `demov0.5.1.svg`
+
+### 🔄 Changed
+- `--pretty` help text updated from "Colorful output with emojis" to "Enable grouped, structured output with section headers"
+- Removed ~250 lines of dead display code from `main.rs` (`display_single_result`, `display_single_result_with_brief_errors`, `format_domain_info`)
+- `ErrorStats` fields changed to `pub(crate)` for access from `ui` module
+
+### 📖 Documentation
+- Updated README hero image to new `demo.svg` showing colored output, presets, and grouped pretty mode
+- Updated all Quick Start examples to reflect new output format (no more emoji-prefixed lines)
+- Updated `docs/CLI.md`: new default/pretty output examples, processing mode descriptions, fixed Table of Contents
+- Corrected TLD count from "42+" to "32" across all docs
+- Fixed country preset reference: `.nl` not `.jp`
+
+### 🧪 Testing
+- Added 6 unit tests for `ui` module (brief_error classification, format_domain_info variants)
+- Updated CLI integration test assertions to match new output format
+- Total test count: 91 → 97
+
+### 📊 Impact
+- Zero new dependencies — uses only existing `console` 0.15 + `tokio`
+- JSON and CSV output completely untouched
+- Non-pretty default mode is backward compatible (same data, now with colors)
+- Spinner writes to stderr — stdout stays clean for piping
+
+## [0.6.1] - 2026-02-12
+
+### 🐛 Fixed
+
+#### **Critical: Stale RDAP Endpoints (Issue #15)**
+- Updated 20 stale RDAP endpoint URLs verified against IANA bootstrap registry
+- Key fix: Google TLDs (app, dev, page, how, soy, new) now use correct `pubapi.registry.google` endpoint
+- Removed 6 defunct ccTLD endpoints (co, eu, it, jp, es, cn) that had no working RDAP alternatives — these now correctly fall through to WHOIS
+- Domains like `google.dev` are no longer incorrectly reported as available
+
+#### **CLI Argument Parsing**
+- Fixed `--json` and `--csv` being silently ignored when combined with `--streaming` — now returns a clear error with guidance to use `--batch`
+- Fixed `--no-whois` flag unconditionally overriding config file and environment variable settings
+- Fixed `--info` flag unconditionally overriding `detailed_info` from config files and `DC_DETAILED_INFO` env var
+- Config/env settings for `whois_fallback` and `detailed_info` are now properly respected when CLI flags are not passed
+
+#### **Misc**
+- Fixed hardcoded version string in verbose output — now uses `CARGO_PKG_VERSION`
+- Fixed 3 clippy warnings (`clippy::unnecessary_unwrap`) for Rust 1.93+ compatibility
+- Updated country preset: replaced defunct `.jp` with `.nl`
+
+### 🧪 Testing
+- Added RDAP endpoint URL format validation test (all endpoints must be `https://` and end with `/domain/`)
+- Added `google.com` smoke test — the single most critical invariant for a domain availability checker
+- Added 11 new CLI argument parsing tests (7 unit + 4 integration) covering streaming+format conflicts, config precedence for `--no-whois` and `--info`, and env var propagation
+- Total test count: 78 → 91
+
+### 📊 Impact
+- RDAP endpoint coverage: 38 → 32 TLDs (removed 6 dead, all remaining verified working)
+- All 3 presets updated and verified: startup (8 TLDs), enterprise (6 TLDs), country (9 TLDs)
+
+## [0.6.0] - 2025-07-01
 
 ### 🚀 Major Release: Configuration Files & Environment Variables
 
@@ -9,8 +350,8 @@ This release introduces comprehensive configuration management, transforming dom
 ### 🎉 Added
 
 #### **Configuration File Support**
-- **TOML configuration files**: Create `.domain-check.toml` for persistent settings
-- **Multi-location discovery**: Local (`./.domain-check.toml`), global (`~/.domain-check.toml`), and XDG (`~/.config/domain-check/config.toml`)
+- **TOML configuration files**: Create `domain-check.toml` for persistent settings
+- **Multi-location discovery**: Local (`./domain-check.toml`), global (`~/.domain-check.toml`), and XDG (`~/.config/domain-check/config.toml`)
 - **Hierarchical precedence**: CLI args > environment variables > local config > global config > XDG config > defaults
 - **Comprehensive validation**: Clear error messages for invalid configuration values
 - **--config flag**: Specify custom configuration file locations
@@ -50,7 +391,7 @@ This release introduces comprehensive configuration management, transforming dom
 
 #### Basic Configuration File
 ```toml
-# .domain-check.toml
+# domain-check.toml
 [defaults]
 concurrency = 25
 preset = "startup"
@@ -135,7 +476,7 @@ domain-check --concurrency 25 --preset startup --pretty anotherdomain
 echo '[defaults]
 concurrency = 25
 preset = "startup"
-pretty = true' > .domain-check.toml
+pretty = true' > domain-check.toml
 # Now simple commands use your preferences
 domain-check mystartup
 domain-check anotherdomain
@@ -144,7 +485,7 @@ domain-check anotherdomain
 This release addresses the most requested workflow improvements: persistent configuration and reduced command repetition. The configuration system transforms domain-check from a basic CLI tool into a comprehensive domain management platform suitable for individual developers, teams, and enterprise automation.
 
 
-## [0.5.1] - 2024-06-24
+## [0.5.1] - 2025-06-24
 
 ### 🚀 Distribution & Licensing Updates
 
